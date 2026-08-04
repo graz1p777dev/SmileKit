@@ -24,6 +24,7 @@ from .crm import (
 from . import templates
 from .media import result_photo_group, should_send_results_after_city, wants_result_photos
 from .outgoing import split_outgoing_messages
+from .sales import classify_objection, wants_to_order
 from .service import SmilekitAssistant
 from .storage import BotStorage
 
@@ -55,6 +56,10 @@ IDLE_NUDGE_DELAY_SECONDS = 30 * 60
 DAILY_NUDGE_INTERVAL_SECONDS = 24 * 60 * 60
 DAILY_NUDGE_MAX_SENDS = 7
 DAILY_NUDGE_CHECK_INTERVAL_SECONDS = 15 * 60
+# Диалог длиннее этого числа входящих сообщений считается развёрнутой
+# консультацией — на второй ступени цепочки простоя другой текст.
+CONSULTATION_MESSAGE_THRESHOLD = 3
+NUDGE_CHECK_INTERVAL_SECONDS = 15 * 60
 
 
 async def main() -> None:
@@ -117,13 +122,38 @@ async def main() -> None:
                     logging.exception("Daily nudge send failed chat=%s", chat_id)
                 storage.advance_daily_nudge(chat_id, now + DAILY_NUDGE_INTERVAL_SECONDS)
 
+    async def check_nudge_follow_ups() -> None:
+        """Простой без ответа / незавершённый заказ — цепочка напоминаний из
+        storage.schedule_nudge_chain/schedule_order_incomplete_nudge."""
+        while True:
+            await asyncio.sleep(NUDGE_CHECK_INTERVAL_SECONDS)
+            now = time.time()
+            for _id, chat_id, kind in storage.due_nudge_follow_ups(now):
+                try:
+                    if kind == "day" and storage.incoming_message_count(chat_id) >= CONSULTATION_MESSAGE_THRESHOLD:
+                        template = templates.AFTER_CONSULT_FOLLOWUP
+                    else:
+                        template = {
+                            "hours": templates.FEW_HOURS_FOLLOWUP,
+                            "day": templates.NEXT_DAY_FOLLOWUP,
+                            "last": templates.LAST_MESSAGE_FOLLOWUP,
+                            "order_incomplete": templates.ORDER_INCOMPLETE_FOLLOWUP,
+                        }[kind]
+                    author = await bot.get_chat(chat_id)
+                    text = templates.fill_nudge_template(template, author.first_name)
+                    await bot.send_chat_action(chat_id, ChatAction.TYPING)
+                    await asyncio.sleep(random.uniform(0.6, 1.0))
+                    await bot.send_message(chat_id, text)
+                except Exception:
+                    logging.exception("Nudge follow-up send failed chat=%s kind=%s", chat_id, kind)
+
     async def _submit_order_and_advance(chat_id: int, payload: dict) -> None:
         delivered = await crm.send_order(payload)
         if delivered:
             # Заказ оформлен — сделка передаётся менеджеру на закрытие.
             await crm.advance_stage(chat_id, "order")
 
-    async def push_order(message: Message, supervisor) -> None:
+    async def push_order(message: Message, supervisor) -> bool:
         """Отправляет клиенту инструкцию+благодарность и заказ в CRM.
 
         Ответ клиенту уже отправлен и ждать сеть не должен, поэтому CRM-задача
@@ -140,9 +170,10 @@ async def main() -> None:
             telegram_username=author.username if author else None,
         )
         if payload is None:
-            return
+            return False
         chat_id = message.chat.id
         storage.cancel_daily_nudge(chat_id)
+        storage.cancel_nudge_follow_ups(chat_id)
         if storage.claim_event(chat_id, f"order_thanks:{payload['externalKey']}"):
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.6, 1.0))
@@ -151,10 +182,11 @@ async def main() -> None:
             await asyncio.sleep(random.uniform(0.6, 1.0))
             await message.answer(templates.THANK_YOU_ORDER)
         if not crm.enabled:
-            return
+            return True
         task = asyncio.create_task(_submit_order_and_advance(message.chat.id, payload))
         crm_tasks.add(task)
         task.add_done_callback(crm_tasks.discard)
+        return True
 
     def push_deal(message: Message, *, is_new_conversation: bool) -> None:
         """Заводит сделку в CRM при первом сообщении клиента этому боту."""
@@ -221,9 +253,26 @@ async def main() -> None:
         )
         history = storage.history(chat_id)
         is_new_conversation = not history
+        # Клиент написал сам — прежние напоминания о простое устарели.
+        storage.cancel_nudge_follow_ups(chat_id)
         push_deal(message, is_new_conversation=is_new_conversation)
         if kind == "text":
             push_stage(message, text)
+
+        # Явное возражение («я подумаю», «дорого») — готовый ответ вместо
+        # полноценной генерации: быстрее, дешевле, звучит последовательно.
+        if kind == "text" and not is_new_conversation:
+            objection = classify_objection(text)
+            if objection:
+                reply_text = templates.THINKING_REPLY if objection == "thinking" else templates.EXPENSIVE_REPLY
+                await message.answer(reply_text)
+                storage.add_exchange(chat_id, message.message_id, text, reply_text, kind)
+                logging.info(
+                    "Objection template chat=%s message=%s objection=%s",
+                    chat_id, message.message_id, objection,
+                )
+                storage.schedule_nudge_chain(chat_id, time.time())
+                return
 
         # Первый контакт — готовый сценарий без обращения к ИИ вообще:
         # экономия полного цикла черновик+проверка на каждый новый диалог.
@@ -264,6 +313,7 @@ async def main() -> None:
                 task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
                 follow_up_tasks.add(task)
                 task.add_done_callback(follow_up_tasks.discard)
+                storage.schedule_nudge_chain(chat_id, time.time())
                 return
 
         reply = await assistant.reply(
@@ -309,7 +359,12 @@ async def main() -> None:
         task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
         follow_up_tasks.add(task)
         task.add_done_callback(follow_up_tasks.discard)
-        await push_order(message, reply.supervisor)
+        order_triggered = await push_order(message, reply.supervisor)
+        if not order_triggered:
+            if kind == "text" and wants_to_order(text):
+                storage.schedule_order_incomplete_nudge(chat_id, time.time())
+            else:
+                storage.schedule_nudge_chain(chat_id, time.time())
         if kind == "text" and wants_result_photos(text):
             await message.answer("Вот результат нашего клиента до и после применения 👇")
             await bot.send_media_group(chat_id, media=result_photo_group())
@@ -484,12 +539,14 @@ async def main() -> None:
     logging.info("Internal HTTP API listening on port %s", settings.port)
 
     daily_nudge_task = asyncio.create_task(check_daily_nudges())
+    nudge_follow_up_task = asyncio.create_task(check_nudge_follow_ups())
 
     try:
         await bot.delete_webhook(drop_pending_updates=False)
         await dp.start_polling(bot)
     finally:
         daily_nudge_task.cancel()
+        nudge_follow_up_task.cancel()
         for task in follow_up_tasks:
             task.cancel()
         for task in debounce_tasks.values():

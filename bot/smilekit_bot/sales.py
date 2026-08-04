@@ -29,3 +29,24 @@ def ensure_manager_contact(message: str, response: str) -> str:
     if MANAGER_CONTACT in digits or MANAGER_CONTACT[-9:] in digits:
         return response
     return f"{response.rstrip()}\n\n{CONTACT_TEXT}"
+
+
+_THINKING_OBJECTION = re.compile(
+    r"(?:я\s+)?подума(?:ю|ем)|над(?:о|а)\s+подумать|дай(?:те)?\s+подумать|"
+    r"мне\s+нужно\s+время|рассмотрю\s+ещ[её]",
+    re.IGNORECASE,
+)
+_EXPENSIVE_OBJECTION = re.compile(
+    r"дорог(?:о|овато|ая|ой)|не\s+потяну|не\s+укладываюсь\s+в\s+бюджет|"
+    r"дешевле\s+есть|скидк[уи]\s+можно",
+    re.IGNORECASE,
+)
+
+
+def classify_objection(text: str) -> str | None:
+    """Явное возражение клиента — готовый ответ вместо генерации ИИ."""
+    if _THINKING_OBJECTION.search(text):
+        return "thinking"
+    if _EXPENSIVE_OBJECTION.search(text):
+        return "expensive"
+    return None

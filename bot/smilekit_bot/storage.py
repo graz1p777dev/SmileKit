@@ -70,6 +70,15 @@ class BotStorage:
                     next_due_at REAL NOT NULL,
                     sent_count INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS nudge_follow_ups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    kind TEXT NOT NULL CHECK (kind IN ('hours', 'day', 'last', 'order_incomplete')),
+                    due_at REAL NOT NULL,
+                    sent_at REAL
+                );
+                CREATE INDEX IF NOT EXISTS nudge_follow_ups_pending_idx
+                    ON nudge_follow_ups(chat_id, sent_at);
                 """
             )
             self._db.commit()
@@ -239,6 +248,7 @@ class BotStorage:
             self._db.execute("DELETE FROM rate_events WHERE chat_id = ?", (chat_id,))
             self._db.execute("DELETE FROM sent_events WHERE chat_id = ?", (chat_id,))
             self._db.execute("DELETE FROM daily_nudges WHERE chat_id = ?", (chat_id,))
+            self._db.execute("DELETE FROM nudge_follow_ups WHERE chat_id = ?", (chat_id,))
             self._db.commit()
 
     def schedule_daily_nudge(self, chat_id: int, next_due_at: float) -> None:
@@ -273,6 +283,67 @@ class BotStorage:
         with self._lock:
             self._db.execute("DELETE FROM daily_nudges WHERE chat_id = ?", (chat_id,))
             self._db.commit()
+
+    def schedule_nudge_chain(self, chat_id: int, now: float) -> None:
+        """Простой без ответа: через несколько часов → на след. день/после
+        консультации → финальное сообщение. Отменяет любые прежние
+        напоминания — они бы дублировали друг друга."""
+        self.cancel_nudge_follow_ups(chat_id)
+        with self._lock:
+            self._db.executemany(
+                "INSERT INTO nudge_follow_ups (chat_id, kind, due_at) VALUES (?, ?, ?)",
+                [
+                    (chat_id, "hours", now + 3 * 3600),
+                    (chat_id, "day", now + 27 * 3600),
+                    (chat_id, "last", now + 75 * 3600),
+                ],
+            )
+            self._db.commit()
+
+    def schedule_order_incomplete_nudge(self, chat_id: int, now: float) -> None:
+        """Клиент сказал «беру»/«оформляйте», но не довёл заказ до конца —
+        одно напоминание вместо обычной цепочки простоя."""
+        self.cancel_nudge_follow_ups(chat_id)
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO nudge_follow_ups (chat_id, kind, due_at) VALUES (?, 'order_incomplete', ?)",
+                (chat_id, now + 3 * 3600),
+            )
+            self._db.commit()
+
+    def cancel_nudge_follow_ups(self, chat_id: int) -> None:
+        with self._lock:
+            self._db.execute(
+                "DELETE FROM nudge_follow_ups WHERE chat_id = ? AND sent_at IS NULL",
+                (chat_id,),
+            )
+            self._db.commit()
+
+    def due_nudge_follow_ups(self, now: float, limit: int = 50) -> list[tuple[int, int, str]]:
+        """Атомарно захватывает просроченные напоминания и возвращает
+        (id, chat_id, kind) — вызывающий код сам решает, что отправить."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id, chat_id, kind FROM nudge_follow_ups WHERE sent_at IS NULL AND due_at <= ? LIMIT ?",
+                (now, limit),
+            ).fetchall()
+            if rows:
+                ids = [row["id"] for row in rows]
+                placeholders = ",".join("?" * len(ids))
+                self._db.execute(
+                    f"UPDATE nudge_follow_ups SET sent_at = ? WHERE id IN ({placeholders})",
+                    (now, *ids),
+                )
+                self._db.commit()
+        return [(row["id"], row["chat_id"], row["kind"]) for row in rows]
+
+    def incoming_message_count(self, chat_id: int) -> int:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT COUNT(*) AS count FROM messages WHERE chat_id = ? AND role = 'user'",
+                (chat_id,),
+            ).fetchone()
+        return row["count"] if row else 0
 
     def close(self) -> None:
         with self._lock:

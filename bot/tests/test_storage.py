@@ -122,3 +122,55 @@ def test_clear_chat_removes_daily_nudge_schedule(tmp_path):
     storage.clear_chat(1)
     assert storage.due_daily_nudges(now=100.0, max_sends=7) == []
     storage.close()
+
+
+def test_nudge_chain_schedules_three_stages(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    storage.schedule_nudge_chain(1, now=1000.0)
+    assert storage.due_nudge_follow_ups(now=1000.0) == []
+    kinds = sorted(kind for _id, _chat, kind in storage.due_nudge_follow_ups(now=1000.0 + 100 * 3600))
+    assert kinds == ["day", "hours", "last"]
+    storage.close()
+
+
+def test_nudge_chain_is_replaced_not_duplicated_by_second_call(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    storage.schedule_nudge_chain(1, now=1000.0)
+    storage.schedule_nudge_chain(1, now=2000.0)
+    due = storage.due_nudge_follow_ups(now=2000.0 + 100 * 3600)
+    assert len(due) == 3
+    storage.close()
+
+
+def test_order_incomplete_nudge_replaces_chain(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    storage.schedule_nudge_chain(1, now=1000.0)
+    storage.schedule_order_incomplete_nudge(1, now=1000.0)
+    due = storage.due_nudge_follow_ups(now=1000.0 + 100 * 3600)
+    assert [kind for _id, _chat, kind in due] == ["order_incomplete"]
+    storage.close()
+
+
+def test_cancel_nudge_follow_ups_removes_pending(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    storage.schedule_nudge_chain(1, now=1000.0)
+    storage.cancel_nudge_follow_ups(1)
+    assert storage.due_nudge_follow_ups(now=1000.0 + 100 * 3600) == []
+    storage.close()
+
+
+def test_clear_chat_removes_nudge_follow_ups(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    storage.schedule_nudge_chain(1, now=1000.0)
+    storage.clear_chat(1)
+    assert storage.due_nudge_follow_ups(now=1000.0 + 100 * 3600) == []
+    storage.close()
+
+
+def test_incoming_message_count(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    assert storage.incoming_message_count(1) == 0
+    storage.add_exchange(1, 1, "Привет", "Здравствуйте", "text")
+    storage.add_exchange(1, 2, "Цена?", "1490 сом", "text")
+    assert storage.incoming_message_count(1) == 2
+    storage.close()

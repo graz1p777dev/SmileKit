@@ -294,6 +294,27 @@ def test_existing_manager_contact_is_not_duplicated():
     assert ensure_manager_contact("Хочу купить", response) == response
 
 
+def test_classify_objection_detects_thinking_and_expensive():
+    from smilekit_bot.sales import classify_objection
+
+    assert classify_objection("Я подумаю пока") == "thinking"
+    assert classify_objection("Надо подумать") == "thinking"
+    assert classify_objection("Ой, дороговато для меня") == "expensive"
+    assert classify_objection("Как использовать?") is None
+
+
+def test_fill_nudge_template_substitutes_and_falls_back():
+    from smilekit_bot import templates
+
+    text = templates.fill_nudge_template(templates.FEW_HOURS_FOLLOWUP, "Айгерим")
+    assert text.startswith("Здравствуйте, Айгерим.")
+    assert "Smilekit" in text
+
+    without_name = templates.fill_nudge_template(templates.LAST_MESSAGE_FOLLOWUP, None)
+    assert not without_name.startswith(",")
+    assert "Smilekit" in without_name
+
+
 @pytest.mark.asyncio
 async def test_photo_is_sent_as_multimodal_input(tmp_path):
     review = SupervisorResult(status="approved", risk_level="low")
