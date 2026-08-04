@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smilekit — отбеливающие полоски для зубов</title>
+<meta name="description" content="Smilekit — фиолетовые полоски для отбеливания зубов. Белоснежная улыбка за 30 минут: без перекиси, без боли и чувствительности. Доставка по Кыргызстану и СНГ.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Unbounded:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>document.documentElement.classList.add('js')</script>
+</head>
+<body>
+
+<div class="progress" aria-hidden="true"></div>
+
+<header class="header" id="top">
+  <div class="shell header__inner">
+    <a class="logo" href="#top">
+      <span class="logo__mark" aria-hidden="true"></span>
+      smilekit
+    </a>
+    <nav class="nav" aria-label="Основная навигация">
+      <a href="#top" class="is-current">Главная</a>
+      <a href="#about">О продукте</a>
+      <a href="#how">Как это работает</a>
+      <a href="#reviews">Отзывы</a>
+      <a href="#faq">FAQ</a>
+      <a href="#contacts">Контакты</a>
+    </nav>
+    <a class="btn btn--sm" href="#order">Заказать сейчас</a>
+  </div>
+</header>
+
+<main>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="shell hero__inner">
+      <div class="hero__copy">
+        <p class="eyebrow reveal">Teeth whitening</p>
+        <h1 class="hero__title reveal js-split">Белоснежная улыбка всего за <em>30&nbsp;минут</em></h1>
+        <p class="hero__sub reveal">Без перекиси, без боли<br>и чувствительности</p>
+        <div class="hero__actions reveal">
+          <a class="btn btn--glow" href="#order">Заказать сейчас</a>
+          <a class="play" href="#how">
+            <span class="play__btn" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>
+            </span>
+            <span>Смотреть, как<br>это работает</span>
+          </a>
+        </div>
+        <div class="trust reveal">
+          <div class="trust__faces" aria-hidden="true">
+            <span>АМ</span><span>БК</span><span>ДТ</span><span>НС</span>
+          </div>
+          <p><strong data-count>1900+</strong> довольных клиентов<br>в Кыргызстане и СНГ</p>
+        </div>
+      </div>
+
+      <div class="hero__visual reveal" data-reveal="scale">
+        <div class="hero__glow" aria-hidden="true"></div>
+        <div class="pack__float">
+          <img class="pack" src="assets/pack.webp"
+               srcset="assets/pack-sm.webp 507w, assets/pack.webp 1015w"
+               sizes="(max-width: 900px) 86vw, 520px"
+               alt="Упаковка Smilekit Purple Whitening Strips и саше с полосками"
+               width="1015" height="967" fetchpriority="high">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Полоса преимуществ -->
+  <section class="strip">
+    <div class="shell strip__inner">
+      <div class="strip__item reveal">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M9 2h6"/></svg>
+        <p>Отбеливание<br>за 30 минут</p>
+      </div>
+      <div class="strip__item reveal">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+        <p>Безопасно<br>для эмали</p>
+      </div>
+      <div class="strip__item reveal">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h3l2-5 3 9 2-6 2 2h4"/></svg>
+        <p>Без боли и<br>чувствительности</p>
+      </div>
+      <div class="strip__item reveal">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16v11H4z"/><path d="M9 8V5h6v3M4 13h16"/></svg>
+        <p>Профессиональный<br>результат дома</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- О продукте -->
+  <section class="section" id="about">
+    <div class="shell band reveal">
+      <figure class="band__media">
+        <img src="assets/product/safety.jpg" alt="Состав полосок Smilekit и отметка halal" width="800" height="1416" loading="lazy">
+      </figure>
+      <div class="band__copy">
+        <p class="eyebrow">О продукте</p>
+        <h2 class="section__title section__title--left js-split">Colour correction и PAP+ в одной полоске</h2>
+        <p class="band__text">Полоска работает сразу в двух направлениях: фиолетовый пигмент нейтрализует жёлтый оттенок визуально, а PAP+ расщепляет налёт на поверхности эмали. Без перекиси водорода — поэтому нет жжения дёсен и прострелов от холодного.</p>
+        <ul class="ticks">
+          <li>28 полосок = 14 применений — курс на две недели</li>
+          <li>Не вредит здоровью зубов</li>
+          <li>Сертификат halal</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Как это работает -->
+  <section class="section section--tint" id="how">
+    <div class="shell">
+      <header class="section__head reveal">
+        <h2 class="section__title js-split">Как это работает</h2>
+        <p class="section__note">Четыре шага и полчаса свободного времени.</p>
+      </header>
+
+      <ol class="steps">
+        <li class="step reveal">
+          <div class="step__media">
+            <img src="assets/steps/step1.jpg" alt="Саше Smilekit на одно применение" width="670" height="514" loading="lazy">
+            <span class="step__num">1</span>
+          </div>
+          <h3>Откройте упаковку</h3>
+          <p>Достаньте саше на один день: в нём полоска для верхнего и для нижнего ряда.</p>
+        </li>
+        <li class="step reveal">
+          <div class="step__media">
+            <img src="assets/steps/step2.jpg" alt="Полоски приклеены к верхним зубам" width="355" height="306" loading="lazy">
+            <span class="step__num">2</span>
+          </div>
+          <h3>Наклейте полоски</h3>
+          <p>Приложите гелевой стороной к сухим зубам и мягко прижмите вдоль линии десны.</p>
+        </li>
+        <li class="step reveal">
+          <div class="step__media">
+            <img src="assets/steps/step3.jpg" alt="Полоски на зубах во время процедуры" width="355" height="306" loading="lazy">
+            <span class="step__num">3</span>
+          </div>
+          <h3>Подождите 30 минут</h3>
+          <p>Занимайтесь своими делами: полоски держатся, не мешают говорить и пить воду.</p>
+        </li>
+        <li class="step reveal">
+          <div class="step__media">
+            <img src="assets/steps/step4.jpg" alt="Улыбка после процедуры отбеливания" width="355" height="305" loading="lazy">
+            <span class="step__num">4</span>
+          </div>
+          <h3>Наслаждайтесь улыбкой</h3>
+          <p>Снимите полоски и прополощите рот. Курс — 14 дней, поддержка — раз в месяц.</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- Результаты -->
+  <section class="section" id="results">
+    <div class="shell">
+      <header class="section__head reveal">
+        <h2 class="section__title js-split">Результаты, которые вы увидите</h2>
+        <p class="section__note">Фотографии покупателей. Потяните ползунок, чтобы сравнить.</p>
+      </header>
+
+      <div class="results reveal">
+        <div class="results__slider">
+          <div class="gallery__track" id="gallery">
+
+            <figure class="case">
+              <div class="compare" style="--pos:50%">
+                <div class="compare__pane">
+                  <img src="assets/results/case2-after.jpg" alt="Зубы после курса Smilekit" loading="lazy">
+                  <span class="compare__tag compare__tag--after">После</span>
+                </div>
+                <div class="compare__pane compare__pane--before">
+                  <img src="assets/results/case2-before.jpg" alt="Зубы до курса Smilekit" loading="lazy">
+                  <span class="compare__tag">До</span>
+                </div>
+                <span class="compare__handle" aria-hidden="true"></span>
+                <input class="compare__range" type="range" min="0" max="100" value="50" aria-label="Сравнить до и после, результат 1">
+              </div>
+              <figcaption>«Действительно отбеливает, я довольна, рекомендую»</figcaption>
+            </figure>
+
+            <figure class="case">
+              <div class="compare" style="--pos:50%">
+                <div class="compare__pane">
+                  <img src="assets/results/case3-after.jpg" alt="Зубы после курса Smilekit" loading="lazy">
+                  <span class="compare__tag compare__tag--after">После</span>
+                </div>
+                <div class="compare__pane compare__pane--before">
+                  <img src="assets/results/case3-before.jpg" alt="Зубы до курса Smilekit" loading="lazy">
+                  <span class="compare__tag">До</span>
+                </div>
+                <span class="compare__handle" aria-hidden="true"></span>
+                <input class="compare__range" type="range" min="0" max="100" value="50" aria-label="Сравнить до и после, результат 2">
+              </div>
+              <figcaption>«Только что попробовала — даа, реально отбеливает»</figcaption>
+            </figure>
+
+            <figure class="case">
+              <div class="compare" style="--pos:50%">
+                <div class="compare__pane">
+                  <img src="assets/results/case4-after.jpg" alt="Зубы после курса Smilekit" loading="lazy">
+                  <span class="compare__tag compare__tag--after">После</span>
+                </div>
+                <div class="compare__pane compare__pane--before">
+                  <img src="assets/results/case4-before.jpg" alt="Зубы до курса Smilekit" loading="lazy">
+                  <span class="compare__tag">До</span>
+                </div>
+                <span class="compare__handle" aria-hidden="true"></span>
+                <input class="compare__range" type="range" min="0" max="100" value="50" aria-label="Сравнить до и после, результат 3">
+              </div>
+              <figcaption>Результат клиентки из сторис Instagram</figcaption>
+            </figure>
+
+            <figure class="case">
+              <div class="compare" style="--pos:50%">
+                <div class="compare__pane">
+                  <img src="assets/results/case5-after.jpg" alt="Зубы после курса Smilekit" loading="lazy">
+                  <span class="compare__tag compare__tag--after">После</span>
+                </div>
+                <div class="compare__pane compare__pane--before">
+                  <img src="assets/results/case5-before.jpg" alt="Зубы до курса Smilekit" loading="lazy">
+                  <span class="compare__tag">До</span>
+                </div>
+                <span class="compare__handle" aria-hidden="true"></span>
+                <input class="compare__range" type="range" min="0" max="100" value="50" aria-label="Сравнить до и после, результат 4">
+              </div>
+              <figcaption>«Результат заметен уже довольно быстро»</figcaption>
+            </figure>
+
+            <figure class="case">
+              <div class="compare" style="--pos:50%">
+                <div class="compare__pane">
+                  <img src="assets/results/case1-after.jpg" alt="Зубы после курса Smilekit" loading="lazy">
+                  <span class="compare__tag compare__tag--after">После</span>
+                </div>
+                <div class="compare__pane compare__pane--before">
+                  <img src="assets/results/case1-before.jpg" alt="Зубы до курса Smilekit" loading="lazy">
+                  <span class="compare__tag">До</span>
+                </div>
+                <span class="compare__handle" aria-hidden="true"></span>
+                <input class="compare__range" type="range" min="0" max="100" value="50" aria-label="Сравнить до и после, результат 5">
+              </div>
+              <figcaption>«В целом неплохо отбеливает» — отзыв из Instagram</figcaption>
+            </figure>
+
+          </div>
+
+          <div class="slider__nav">
+            <button class="slider__btn" type="button" data-slide="prev" data-target="gallery" aria-label="Предыдущий результат">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+            </button>
+            <button class="slider__btn" type="button" data-slide="next" data-target="gallery" aria-label="Следующий результат">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <ul class="stats">
+          <li>
+            <strong data-count>30</strong>
+            <span>минут одна процедура — оттенок виден уже после первой</span>
+          </li>
+          <li>
+            <strong data-count>14</strong>
+            <span>применений в упаковке: 28 полосок, курс на две недели</span>
+          </li>
+          <li>
+            <strong>V34</strong>
+            <span>цветовая коррекция: фиолетовый гасит жёлтый оттенок эмали</span>
+          </li>
+        </ul>
+      </div>
+
+      <p class="results__note">* Результаты индивидуальны и могут отличаться.</p>
+    </div>
+  </section>
+
+  <!-- Отзывы -->
+  <section class="section section--tint" id="reviews">
+    <div class="shell">
+      <header class="section__head reveal">
+        <h2 class="section__title js-split">Что говорят наши клиенты</h2>
+        <p class="section__note">Переписки с покупателями в Instagram Direct — без правок.</p>
+      </header>
+
+      <div class="cards cards--3">
+        <article class="review reveal">
+          <p class="review__stars" aria-label="Оценка 5 из 5">★★★★★</p>
+          <blockquote>«Очень доволен. Продукт действительно понравился! Удобный в использовании, <b>не вызвал сильного дискомфорта</b>, а результат заметен уже довольно быстро. Теперь буду рекомендовать знакомым.»</blockquote>
+          <div class="review__author">
+            <span class="avatar" data-initials="АМ" aria-hidden="true"></span>
+            <span><strong>Айгерим М.</strong><br>Бишкек</span>
+          </div>
+        </article>
+
+        <article class="review reveal">
+          <p class="review__stars" aria-label="Оценка 5 из 5">★★★★★</p>
+          <blockquote>«<b>Действительно отбеливает</b>, только вначале было трудно зафиксировать полоски к зубам. А так довольна, рекомендую.»</blockquote>
+          <div class="review__author">
+            <span class="avatar" data-initials="БК" aria-hidden="true"></span>
+            <span><strong>Бермет К.</strong><br>Ош</span>
+          </div>
+        </article>
+
+        <article class="review reveal">
+          <p class="review__stars" aria-label="Оценка 5 из 5">★★★★★</p>
+          <blockquote>«Я <b>не ожидала такого прям хорошего результата</b>. Спасибо!»</blockquote>
+          <div class="review__author">
+            <span class="avatar" data-initials="НС" aria-hidden="true"></span>
+            <span><strong>Нурзада С.</strong><br>Каракол</span>
+          </div>
+        </article>
+      </div>
+    </div>
+
+    <div class="shell shots__head reveal">
+      <p class="section__note">Скриншоты переписок — как есть. Наведите, чтобы остановить ленту.</p>
+    </div>
+
+    <div class="marquee reveal">
+      <div class="marquee__row" id="shots">
+        <img class="shot" src="assets/reviews/r1.jpg" alt="Скриншот отзыва покупателя" loading="lazy">
+        <img class="shot" src="assets/reviews/r2.jpg" alt="Скриншот отзыва покупателя" loading="lazy">
+        <img class="shot" src="assets/reviews/r3.jpg" alt="Скриншот отзыва покупателя" loading="lazy">
+        <img class="shot" src="assets/reviews/r4.jpg" alt="Скриншот отзыва покупателя" loading="lazy">
+        <img class="shot" src="assets/reviews/r5.jpg" alt="Скриншот отзыва покупателя" loading="lazy">
+        <img class="shot" src="assets/reviews/r6.jpg" alt="Скриншот отзыва покупателя" loading="lazy">
+        <img class="shot" src="assets/reviews/r7.jpg" alt="Скриншот отзыва покупателя" loading="lazy">
+        <img class="shot" src="assets/reviews/r8.jpg" alt="Скриншот отзыва покупателя" loading="lazy">
+        <img class="shot" src="assets/reviews/r9.jpg" alt="Скриншот отзыва покупателя" loading="lazy">
+        <img class="shot" src="assets/product/promo.jpg" alt="Скриншот заказа из переписки" loading="lazy">
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="section" id="faq">
+    <div class="shell">
+      <header class="section__head reveal">
+        <h2 class="section__title js-split">Часто задаваемые вопросы</h2>
+      </header>
+
+      <div class="faq reveal">
+        <div class="faq__item">
+          <button class="faq__q" type="button" aria-expanded="false">
+            <span>Больно ли использовать полоски?</span>
+            <span class="faq__sign" aria-hidden="true"></span>
+          </button>
+          <div class="faq__a"><p>Нет. В составе нет перекиси водорода, поэтому полоски не раздражают десну и не вызывают прострелов от холодного. Если чувствительность повышенная, начните с 15 минут и увеличивайте время в течение недели.</p></div>
+        </div>
+
+        <div class="faq__item">
+          <button class="faq__q" type="button" aria-expanded="false">
+            <span>Когда будет заметен результат?</span>
+            <span class="faq__sign" aria-hidden="true"></span>
+          </button>
+          <div class="faq__a"><p>Colour correction даёт видимый эффект сразу после первой процедуры, но держится он недолго. Устойчивый результат накапливается за курс из 14 применений.</p></div>
+        </div>
+
+        <div class="faq__item">
+          <button class="faq__q" type="button" aria-expanded="false">
+            <span>Как часто можно использовать?</span>
+            <span class="faq__sign" aria-hidden="true"></span>
+          </button>
+          <div class="faq__a"><p>Курс — одна процедура в день по 30 минут на протяжении 14 дней. Дальше достаточно одной поддерживающей процедуры в 3–4 недели или трёх дней подряд перед событием.</p></div>
+        </div>
+
+        <div class="faq__item">
+          <button class="faq__q" type="button" aria-expanded="false">
+            <span>Можно ли использовать с брекетами?</span>
+            <span class="faq__sign" aria-hidden="true"></span>
+          </button>
+          <div class="faq__a"><p>Да. Формула без перекиси рассчитана в том числе на чувствительные зубы, брекеты и виниры — она не повреждает конструкции. Учтите физику: сами виниры, коронки и пломбы не осветляются и сохраняют исходный оттенок, а под брекет-замками эмаль останется прежней, пока конструкцию не снимут.</p></div>
+        </div>
+
+        <div class="faq__item">
+          <button class="faq__q" type="button" aria-expanded="false">
+            <span>Безопасно ли для зубов и эмали?</span>
+            <span class="faq__sign" aria-hidden="true"></span>
+          </button>
+          <div class="faq__a"><p>Да, при соблюдении инструкции. Гель работает с пигментом на поверхности эмали и не затрагивает минеральный слой. При кариесе и воспалении дёсен сначала посетите стоматолога.</p></div>
+        </div>
+
+        <div class="faq__item">
+          <button class="faq__q" type="button" aria-expanded="false">
+            <span>Есть ли ограничения по возрасту?</span>
+            <span class="faq__sign" aria-hidden="true"></span>
+          </button>
+          <div class="faq__a"><p>Полоски не подходят детям и подросткам до 16 лет, а также беременным и кормящим. В остальных случаях ограничений нет.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- Заказ и подвал — один фиолетовый блок со скруглённым верхом -->
+<div class="closing">
+  <section class="order" id="order">
+    <div class="shell order__inner">
+      <figure class="order__media reveal">
+        <img src="assets/pack-sm.webp" alt="Упаковка Smilekit" width="507" height="483" loading="lazy">
+      </figure>
+
+      <div class="order__copy reveal">
+        <h2 class="order__title js-split">Готовы к своей идеальной улыбке?</h2>
+        <p>Закажите Smilekit прямо сейчас — привезём сегодня, оплата при получении.</p>
+        <a class="btn btn--light" href="https://instagram.com/smilekit_whitening" target="_blank" rel="noopener">Заказать сейчас</a>
+      </div>
+
+      <ul class="order__perks reveal">
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg>
+          <span><strong>Быстрая доставка</strong><br>Бишкек 30 мин, регионы 1 день</span>
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+          <span><strong>Оригинальный продукт</strong><br>Состав halal, 14 применений</span>
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-4.2-7.6L21 3l-1.4 4.2A8.9 8.9 0 0 1 21 12z"/><path d="M8.5 9.5c.6 3 3 5.4 6 6l1.2-1.7-2.3-1.2-1 .9a7 7 0 0 1-2-2l.9-1L10.2 8z"/></svg>
+          <span><strong>Поддержка в WhatsApp</strong><br>Ответим и подберём курс</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <footer class="footer" id="contacts">
+  <div class="shell footer__inner">
+    <a class="logo logo--light" href="#top">
+      <span class="logo__mark" aria-hidden="true"></span>
+      smilekit
+    </a>
+
+    <nav class="footer__nav" aria-label="Дополнительные ссылки">
+      <a href="#about">О нас</a>
+      <a href="#order">Доставка и оплата</a>
+      <a href="#faq">Возврат</a>
+      <a href="#">Политика конфиденциальности</a>
+    </nav>
+
+    <div class="footer__social">
+      <a href="https://instagram.com/smilekit_whitening" target="_blank" rel="noopener" aria-label="Instagram">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1.2" fill="currentColor" stroke="none"/></svg>
+      </a>
+      <a href="https://wa.me/996700000000" target="_blank" rel="noopener" aria-label="WhatsApp">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-4.2-7.6L21 3l-1.4 4.2A8.9 8.9 0 0 1 21 12z"/><path d="M8.5 9.5c.6 3 3 5.4 6 6l1.2-1.7-2.3-1.2-1 .9a7 7 0 0 1-2-2l.9-1L10.2 8z"/></svg>
+      </a>
+      <a href="tel:+996700000000" aria-label="Позвонить">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1.1 1A16 16 0 0 1 4 5.1 1 1 0 0 1 5 4z"/></svg>
+      </a>
+    </div>
+  </div>
+
+  <div class="shell footer__bottom">
+    <p>© 2026 Smilekit. Кыргызстан.</p>
+    <p>+996 700 00-00-00 · hello@smilekit.kg</p>
+  </div>
+  </footer>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
