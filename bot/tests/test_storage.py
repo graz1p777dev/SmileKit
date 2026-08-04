@@ -76,3 +76,49 @@ def test_clear_chat_keeps_duplicate_guard(tmp_path):
     assert storage.memory(1) == ""
     assert not storage.claim_message(1, 99)
     storage.close()
+
+
+def test_daily_nudge_schedule_is_not_reset_by_second_call(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    storage.schedule_daily_nudge(1, 100.0)
+    storage.schedule_daily_nudge(1, 999.0)  # не должно сдвинуть уже заведённое
+    assert storage.due_daily_nudges(now=100.0, max_sends=7) == [1]
+    assert storage.due_daily_nudges(now=50.0, max_sends=7) == []
+    storage.close()
+
+
+def test_daily_nudge_advance_moves_next_due_and_counts_sends(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    storage.schedule_daily_nudge(1, 100.0)
+    storage.advance_daily_nudge(1, 200.0)
+    assert storage.due_daily_nudges(now=150.0, max_sends=7) == []
+    assert storage.due_daily_nudges(now=200.0, max_sends=7) == [1]
+    row = storage._db.execute("SELECT sent_count FROM daily_nudges WHERE chat_id = 1").fetchone()
+    assert row["sent_count"] == 1
+    storage.close()
+
+
+def test_daily_nudge_cap_excludes_chat_after_enough_sends(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    storage.schedule_daily_nudge(1, 100.0)
+    for i in range(3):
+        storage.advance_daily_nudge(1, 100.0 + i)
+    assert storage.due_daily_nudges(now=1000.0, max_sends=3) == []
+    assert storage.due_daily_nudges(now=1000.0, max_sends=4) == [1]
+    storage.close()
+
+
+def test_cancel_daily_nudge_removes_schedule(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    storage.schedule_daily_nudge(1, 100.0)
+    storage.cancel_daily_nudge(1)
+    assert storage.due_daily_nudges(now=100.0, max_sends=7) == []
+    storage.close()
+
+
+def test_clear_chat_removes_daily_nudge_schedule(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    storage.schedule_daily_nudge(1, 100.0)
+    storage.clear_chat(1)
+    assert storage.due_daily_nudges(now=100.0, max_sends=7) == []
+    storage.close()

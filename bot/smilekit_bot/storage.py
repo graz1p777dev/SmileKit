@@ -65,6 +65,11 @@ class BotStorage:
                     value TEXT NOT NULL,
                     updated_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS daily_nudges (
+                    chat_id INTEGER PRIMARY KEY,
+                    next_due_at REAL NOT NULL,
+                    sent_count INTEGER NOT NULL DEFAULT 0
+                );
                 """
             )
             self._db.commit()
@@ -233,6 +238,40 @@ class BotStorage:
             self._db.execute("DELETE FROM orders WHERE chat_id = ?", (chat_id,))
             self._db.execute("DELETE FROM rate_events WHERE chat_id = ?", (chat_id,))
             self._db.execute("DELETE FROM sent_events WHERE chat_id = ?", (chat_id,))
+            self._db.execute("DELETE FROM daily_nudges WHERE chat_id = ?", (chat_id,))
+            self._db.commit()
+
+    def schedule_daily_nudge(self, chat_id: int, next_due_at: float) -> None:
+        """Заводит расписание один раз при первом контакте — время дня якорится
+        на момент, когда клиент написал впервые. Повторный вызов не сдвигает
+        уже существующее расписание."""
+        with self._lock:
+            self._db.execute(
+                "INSERT OR IGNORE INTO daily_nudges (chat_id, next_due_at, sent_count) VALUES (?, ?, 0)",
+                (chat_id, next_due_at),
+            )
+            self._db.commit()
+
+    def due_daily_nudges(self, now: float, max_sends: int, limit: int = 50) -> list[int]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT chat_id FROM daily_nudges WHERE next_due_at <= ? AND sent_count < ? LIMIT ?",
+                (now, max_sends, limit),
+            ).fetchall()
+        return [row["chat_id"] for row in rows]
+
+    def advance_daily_nudge(self, chat_id: int, next_due_at: float) -> None:
+        with self._lock:
+            self._db.execute(
+                "UPDATE daily_nudges SET next_due_at = ?, sent_count = sent_count + 1 WHERE chat_id = ?",
+                (next_due_at, chat_id),
+            )
+            self._db.commit()
+
+    def cancel_daily_nudge(self, chat_id: int) -> None:
+        """Клиент оформил заказ — больше не напоминаем про скидку."""
+        with self._lock:
+            self._db.execute("DELETE FROM daily_nudges WHERE chat_id = ?", (chat_id,))
             self._db.commit()
 
     def close(self) -> None:

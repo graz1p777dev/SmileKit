@@ -2,6 +2,7 @@ import asyncio
 import base64
 import logging
 import random
+import time
 from collections import defaultdict
 from io import BytesIO
 
@@ -45,6 +46,15 @@ ROUTED_TEMPLATES = {
 # живых чатах). Без этого окна каждое такое сообщение уходило в отдельный
 # независимый вызов AI, и клиенту прилетало по несколько ответов подряд.
 DEBOUNCE_SECONDS = 3.0
+# Клиент замолчал после ответа бота — не бросаем диалог: раз бот уже что-то
+# показал (эффект, цену), полчаса тишины — разумный порог "перестал отвечать".
+IDLE_NUDGE_DELAY_SECONDS = 30 * 60
+# Ежедневное напоминание про скидку — время дня якорится на первый контакт
+# (написал днём — рассылка днём). Останавливается, как только клиент
+# оформил заказ; ограничено, чтобы не превратиться в бесконечный спам.
+DAILY_NUDGE_INTERVAL_SECONDS = 24 * 60 * 60
+DAILY_NUDGE_MAX_SENDS = 7
+DAILY_NUDGE_CHECK_INTERVAL_SECONDS = 15 * 60
 
 
 async def main() -> None:
@@ -81,6 +91,32 @@ async def main() -> None:
             "Если хотите, могу отправить ещё отзывы наших клиентов 😊",
         )
 
+    async def idle_nudge(chat_id: int, message_id: int) -> None:
+        """Клиент замолчал после ответа бота — напоминаем об эффекте один раз
+        на этот простой. claim_event по message_id, а не по chat_id: после
+        следующего сообщения клиента новый простой сможет напомнить снова."""
+        await asyncio.sleep(IDLE_NUDGE_DELAY_SECONDS)
+        if storage.has_message_after(chat_id, message_id):
+            return
+        if not storage.claim_event(chat_id, f"idle_nudge:{message_id}"):
+            return
+        await bot.send_chat_action(chat_id, ChatAction.TYPING)
+        await asyncio.sleep(random.uniform(0.8, 1.3))
+        await bot.send_message(chat_id, templates.FIRST_USE_EFFECT)
+
+    async def check_daily_nudges() -> None:
+        while True:
+            await asyncio.sleep(DAILY_NUDGE_CHECK_INTERVAL_SECONDS)
+            now = time.time()
+            for chat_id in storage.due_daily_nudges(now, DAILY_NUDGE_MAX_SENDS):
+                try:
+                    await bot.send_chat_action(chat_id, ChatAction.TYPING)
+                    await asyncio.sleep(random.uniform(0.6, 1.0))
+                    await bot.send_message(chat_id, templates.DAILY_DISCOUNT_OFFER)
+                except Exception:
+                    logging.exception("Daily nudge send failed chat=%s", chat_id)
+                storage.advance_daily_nudge(chat_id, now + DAILY_NUDGE_INTERVAL_SECONDS)
+
     async def _submit_order_and_advance(chat_id: int, payload: dict) -> None:
         delivered = await crm.send_order(payload)
         if delivered:
@@ -106,6 +142,7 @@ async def main() -> None:
         if payload is None:
             return
         chat_id = message.chat.id
+        storage.cancel_daily_nudge(chat_id)
         if storage.claim_event(chat_id, f"order_thanks:{payload['externalKey']}"):
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.6, 1.0))
@@ -199,6 +236,10 @@ async def main() -> None:
                 chat_id, message.message_id, text,
                 f"{templates.PRODUCT_INFO}\n\n{templates.CITY_QUESTION}", kind,
             )
+            storage.schedule_daily_nudge(chat_id, time.time() + DAILY_NUDGE_INTERVAL_SECONDS)
+            task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
+            follow_up_tasks.add(task)
+            task.add_done_callback(follow_up_tasks.discard)
             return
 
         memory = storage.memory(chat_id)
@@ -220,6 +261,9 @@ async def main() -> None:
                     "Template routed chat=%s message=%s template=%s",
                     chat_id, message.message_id, template_id,
                 )
+                task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
+                follow_up_tasks.add(task)
+                task.add_done_callback(follow_up_tasks.discard)
                 return
 
         reply = await assistant.reply(
@@ -262,6 +306,9 @@ async def main() -> None:
             reply.supervisor.customer_memory,
             reply.supervisor.order_summary,
         )
+        task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
+        follow_up_tasks.add(task)
+        task.add_done_callback(follow_up_tasks.discard)
         await push_order(message, reply.supervisor)
         if kind == "text" and wants_result_photos(text):
             await message.answer("Вот результат нашего клиента до и после применения 👇")
@@ -436,10 +483,13 @@ async def main() -> None:
     await site.start()
     logging.info("Internal HTTP API listening on port %s", settings.port)
 
+    daily_nudge_task = asyncio.create_task(check_daily_nudges())
+
     try:
         await bot.delete_webhook(drop_pending_updates=False)
         await dp.start_polling(bot)
     finally:
+        daily_nudge_task.cancel()
         for task in follow_up_tasks:
             task.cancel()
         for task in debounce_tasks.values():
