@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -203,6 +204,51 @@ async def test_order_intent_is_written_by_ai(tmp_path):
     result = await assistant(tmp_path, responses).reply("Оформите доставку", [])
     assert "имя и номер телефона" in result.text
     assert responses.create_kwargs is not None
+
+
+class FakeRouteResponses:
+    """Мок только для route(): отдельный формат ответа (function_call),
+    не пересекается с FakeResponses.create()/.parse() для reply()."""
+
+    def __init__(self, function_call: dict | None = None, fail=False):
+        self.function_call = function_call
+        self.fail = fail
+        self.create_kwargs = None
+
+    def create(self, **kwargs):
+        self.create_kwargs = kwargs
+        if self.fail:
+            raise RuntimeError("network")
+        if self.function_call is None:
+            return SimpleNamespace(output=[])
+        item = SimpleNamespace(
+            type="function_call",
+            name="send_template",
+            arguments=json.dumps(self.function_call),
+        )
+        return SimpleNamespace(output=[item])
+
+
+@pytest.mark.asyncio
+async def test_route_returns_template_id_on_function_call(tmp_path):
+    responses = FakeRouteResponses({"template_id": "effect_duration"})
+    result = await assistant(tmp_path, responses).route("На сколько хватает эффекта?", [])
+    assert result == "effect_duration"
+    assert responses.create_kwargs["tools"][0]["name"] == "send_template"
+
+
+@pytest.mark.asyncio
+async def test_route_returns_none_without_function_call(tmp_path):
+    responses = FakeRouteResponses(None)
+    result = await assistant(tmp_path, responses).route("Расскажите подробнее о бренде", [])
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_route_failure_returns_none_instead_of_raising(tmp_path):
+    responses = FakeRouteResponses(fail=True)
+    result = await assistant(tmp_path, responses).route("Что-то про эффект", [])
+    assert result is None
 
 
 def test_prompts_require_confident_brand_voice_without_internal_wording():

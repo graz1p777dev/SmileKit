@@ -20,6 +20,7 @@ from .crm import (
     build_order_payload,
     stage_action_for_inbound,
 )
+from . import templates
 from .media import result_photo_group, should_send_results_after_city, wants_result_photos
 from .outgoing import split_outgoing_messages
 from .service import SmilekitAssistant
@@ -35,6 +36,15 @@ RATE_LIMIT_TEXT = (
     "Сообщений пришло слишком много за короткое время. "
     "Подождите, пожалуйста, минуту и отправьте вопрос ещё раз."
 )
+# template_id из assistant.route() -> готовый текст.
+ROUTED_TEMPLATES = {
+    "effect_duration": templates.EFFECT_DURATION,
+    "safety_composition": templates.SAFETY_COMPOSITION,
+}
+# Клиент часто пишет мыслями через несколько сообщений подряд (видно на
+# живых чатах). Без этого окна каждое такое сообщение уходило в отдельный
+# независимый вызов AI, и клиенту прилетало по несколько ответов подряд.
+DEBOUNCE_SECONDS = 3.0
 
 
 async def main() -> None:
@@ -55,6 +65,8 @@ async def main() -> None:
     locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
     follow_up_tasks: set[asyncio.Task] = set()
     crm_tasks: set[asyncio.Task] = set()
+    pending_texts: dict[int, list[str]] = defaultdict(list)
+    debounce_tasks: dict[int, asyncio.Task] = {}
 
     async def follow_up_after_results(chat_id: int, message_id: int) -> None:
         await asyncio.sleep(3 * 60)
@@ -75,14 +87,15 @@ async def main() -> None:
             # Заказ оформлен — сделка передаётся менеджеру на закрытие.
             await crm.advance_stage(chat_id, "order")
 
-    def push_order(message: Message, supervisor) -> None:
-        """Отправляет оформленный заказ в CRM и двигает сделку в «Передан менеджеру».
+    async def push_order(message: Message, supervisor) -> None:
+        """Отправляет клиенту инструкцию+благодарность и заказ в CRM.
 
-        Ответ клиенту уже отправлен и ждать сеть не должен, поэтому задача
+        Ответ клиенту уже отправлен и ждать сеть не должен, поэтому CRM-задача
         не ожидается здесь: результат и ошибки уходят в лог внутри send_order.
+        Клиентские сообщения claim_event-дедуплицированы по составу заказа —
+        повторное подтверждение того же состава (тот же externalKey) их не
+        повторит, а изменившийся состав — новый заказ, новая благодарность.
         """
-        if not crm.enabled:
-            return
         author = message.from_user
         payload = build_order_payload(
             message.chat.id,
@@ -91,6 +104,16 @@ async def main() -> None:
             telegram_username=author.username if author else None,
         )
         if payload is None:
+            return
+        chat_id = message.chat.id
+        if storage.claim_event(chat_id, f"order_thanks:{payload['externalKey']}"):
+            await bot.send_chat_action(chat_id, ChatAction.TYPING)
+            await asyncio.sleep(random.uniform(0.6, 1.0))
+            await message.answer(templates.USAGE_INSTRUCTIONS)
+            await bot.send_chat_action(chat_id, ChatAction.TYPING)
+            await asyncio.sleep(random.uniform(0.6, 1.0))
+            await message.answer(templates.THANK_YOU_ORDER)
+        if not crm.enabled:
             return
         task = asyncio.create_task(_submit_order_and_advance(message.chat.id, payload))
         crm_tasks.add(task)
@@ -160,15 +183,45 @@ async def main() -> None:
             kind,
         )
         history = storage.history(chat_id)
-        push_deal(message, is_new_conversation=not history)
+        is_new_conversation = not history
+        push_deal(message, is_new_conversation=is_new_conversation)
         if kind == "text":
             push_stage(message, text)
+
+        # Первый контакт — готовый сценарий без обращения к ИИ вообще:
+        # экономия полного цикла черновик+проверка на каждый новый диалог.
+        if kind == "text" and is_new_conversation:
+            await message.answer(templates.PRODUCT_INFO)
+            await bot.send_chat_action(chat_id, ChatAction.TYPING)
+            await asyncio.sleep(random.uniform(0.6, 1.0))
+            await message.answer(templates.CITY_QUESTION)
+            storage.add_exchange(
+                chat_id, message.message_id, text,
+                f"{templates.PRODUCT_INFO}\n\n{templates.CITY_QUESTION}", kind,
+            )
+            return
+
         memory = storage.memory(chat_id)
         auto_result_photos = kind == "text" and should_send_results_after_city(
             text, [item.content for item in history]
         )
         await bot.send_chat_action(chat_id, ChatAction.TYPING)
         current_settings = effective_settings(storage, settings)
+
+        # Роутер шаблонов: если вопрос дословно попадает под готовый ответ
+        # (срок эффекта, состав) — шлём его напрямую, без полного цикла ИИ.
+        if kind == "text":
+            template_id = await assistant.route(text, history, model=current_settings["model"])
+            template_text = ROUTED_TEMPLATES.get(template_id)
+            if template_text:
+                await message.answer(template_text)
+                storage.add_exchange(chat_id, message.message_id, text, template_text, kind)
+                logging.info(
+                    "Template routed chat=%s message=%s template=%s",
+                    chat_id, message.message_id, template_id,
+                )
+                return
+
         reply = await assistant.reply(
             text,
             history,
@@ -209,7 +262,7 @@ async def main() -> None:
             reply.supervisor.customer_memory,
             reply.supervisor.order_summary,
         )
-        push_order(message, reply.supervisor)
+        await push_order(message, reply.supervisor)
         if kind == "text" and wants_result_photos(text):
             await message.answer("Вот результат нашего клиента до и после применения 👇")
             await bot.send_media_group(chat_id, media=result_photo_group())
@@ -223,11 +276,12 @@ async def main() -> None:
             await bot.send_media_group(chat_id, media=result_photo_group())
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.8, 1.3))
-            await message.answer(
-                "Изменения будут видны уже после первого применения, "
-                "а после курса результат закрепится ✅\n\n"
-                "Вам реально понравится результат после первого применения."
-            )
+            await message.answer(templates.FIRST_USE_EFFECT)
+            delivery_text = templates.delivery_template_for_city(text)
+            if delivery_text:
+                await bot.send_chat_action(chat_id, ChatAction.TYPING)
+                await asyncio.sleep(random.uniform(0.7, 1.1))
+                await message.answer(delivery_text)
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.7, 1.1))
             await message.answer("Вам оформить заказ?")
@@ -318,25 +372,50 @@ async def main() -> None:
                     "Отправьте его ещё раз или напишите вопрос текстом."
                 )
 
-    @dp.message(F.text)
-    async def handle_text(message: Message) -> None:
-        if not message.text:
+    async def debounced_text_process(message: Message) -> None:
+        chat_id = message.chat.id
+        try:
+            await asyncio.sleep(DEBOUNCE_SECONDS)
+        except asyncio.CancelledError:
+            # Клиент прислал ещё одно сообщение до истечения окна ожидания —
+            # его обработчик уже запланировал новый debounce-таск и допишет
+            # текст в pending_texts, дальше ничего делать не нужно.
             return
-        async with locks[message.chat.id]:
-            if not await claim(message):
-                return
+        # Убираем себя из реестра ДО захвата lock: если во время генерации
+        # ответа придёт новое сообщение, его обработчик не должен отменять
+        # уже выполняющийся вызов AI — вместо этого он поставит в очередь
+        # свой собственный debounce-таск, который дождётся освобождения lock.
+        debounce_tasks.pop(chat_id, None)
+        texts = pending_texts.pop(chat_id, None)
+        if not texts:
+            return
+        combined_text = "\n".join(texts)
+        async with locks[chat_id]:
             try:
-                await process(message, message.text, kind="text")
+                await process(message, combined_text, kind="text")
             except Exception:
                 logging.exception(
                     "Text processing failed chat=%s message=%s",
-                    message.chat.id,
+                    chat_id,
                     message.message_id,
                 )
                 await message.answer(
                     "Не получилось обработать сообщение. "
                     "Отправьте его, пожалуйста, ещё раз."
                 )
+
+    @dp.message(F.text)
+    async def handle_text(message: Message) -> None:
+        if not message.text:
+            return
+        if not await claim(message):
+            return
+        chat_id = message.chat.id
+        pending_texts[chat_id].append(message.text)
+        previous_task = debounce_tasks.get(chat_id)
+        if previous_task is not None:
+            previous_task.cancel()
+        debounce_tasks[chat_id] = asyncio.create_task(debounced_text_process(message))
 
     @dp.message()
     async def unsupported(message: Message) -> None:
@@ -362,6 +441,8 @@ async def main() -> None:
         await dp.start_polling(bot)
     finally:
         for task in follow_up_tasks:
+            task.cancel()
+        for task in debounce_tasks.values():
             task.cancel()
         if crm_tasks:
             # Заказ терять нельзя: даём отправке доехать до выхода.

@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 import logging
 from pathlib import Path
 
@@ -15,6 +16,40 @@ FALLBACK_TEXT = (
 LOGGER = logging.getLogger(__name__)
 DRAFT_TIMEOUT_SECONDS = 20
 REVIEW_TIMEOUT_SECONDS = 15
+ROUTE_TIMEOUT_SECONDS = 8
+
+# Роутер шаблонов: дешёвый вызов с function calling вместо полного цикла
+# черновик+проверка там, где ответ и так один и тот же готовый текст.
+# Если сомневается — не вызывает функцию, и reply() идёт по обычному пути.
+ROUTE_PROMPT = (
+    "Ты — маршрутизатор ответов Smilekit. Если сообщение клиента дословно "
+    "попадает под один из готовых сценариев — вызови send_template с его id. "
+    "Вызывай, только если уверен; при малейшем сомнении, шутке, жалобе или "
+    "составном вопросе с другими темами — не вызывай функцию вообще."
+)
+
+ROUTE_TOOL = {
+    "type": "function",
+    "name": "send_template",
+    "description": "Отправить готовый шаблонный ответ вместо генерации нового текста.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "template_id": {
+                "type": "string",
+                "enum": ["effect_duration", "safety_composition"],
+                "description": (
+                    "effect_duration — клиент спрашивает, на сколько хватает эффекта, "
+                    "сколько он держится или сколько длится результат. "
+                    "safety_composition — клиент спрашивает про состав, безопасность "
+                    "состава, вред для эмали или дёсен."
+                ),
+            }
+        },
+        "required": ["template_id"],
+        "additionalProperties": False,
+    },
+}
 
 
 class SmilekitAssistant:
@@ -113,6 +148,48 @@ class SmilekitAssistant:
         elif review.status == "rewrite":
             text = review.corrected_response.strip() or FALLBACK_TEXT
         return AssistantReply(text=text, supervisor=review)
+
+    async def route(
+        self, message: str, history: list[ChatMessage], *, model: str | None = None
+    ) -> str | None:
+        """template_id, если сообщение точно попадает под готовый шаблон,
+        иначе None — тогда reply() идёт по обычному пути. Никогда не бросает
+        исключение наружу: сбой роутера не должен ронять обычный ответ."""
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._route, message, history, model),
+                timeout=ROUTE_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            LOGGER.exception("Template routing failed")
+            return None
+
+    def _route(
+        self, message: str, history: list[ChatMessage], model: str | None
+    ) -> str | None:
+        history_text = "\n".join(
+            f"{item.role}: {item.content}" for item in history[-6:]
+        ) or "(новый диалог)"
+        response = self.client.responses.create(
+            model=model or self.model,
+            reasoning={"effort": "low"},
+            instructions=ROUTE_PROMPT,
+            input=[{
+                "role": "user",
+                "content": f"ИСТОРИЯ:\n{history_text}\n\nСООБЩЕНИЕ КЛИЕНТА:\n{message}",
+            }],
+            tools=[ROUTE_TOOL],
+            tool_choice="auto",
+            store=False,
+        )
+        for item in response.output:
+            if getattr(item, "type", None) != "function_call" or item.name != "send_template":
+                continue
+            try:
+                return json.loads(item.arguments).get("template_id")
+            except (json.JSONDecodeError, AttributeError):
+                return None
+        return None
 
     async def transcribe(
         self, audio: bytes, filename: str, model: str = "gpt-transcribe"
