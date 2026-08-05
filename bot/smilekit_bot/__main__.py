@@ -114,6 +114,10 @@ async def main() -> None:
         await asyncio.sleep(IDLE_NUDGE_DELAY_SECONDS)
         if storage.has_message_after(chat_id, message_id):
             return
+        if storage.get_pending_payment(chat_id) is not None:
+            # Ждём чек по уже отправленному QR — рассказывать про эффект
+            # посреди оплаты неуместно, дожимом занимается awaiting_payment.
+            return
         if not storage.claim_event(chat_id, f"idle_nudge:{message_id}"):
             return
         await bot.send_chat_action(chat_id, ChatAction.TYPING)
