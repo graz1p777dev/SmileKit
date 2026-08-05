@@ -487,16 +487,20 @@ async def main() -> None:
         async with locks[message.chat.id]:
             if not await claim(message, rate_limit=False):
                 return
-            storage.clear_chat(message.chat.id)
-            start_text = (
-                "Здравствуйте! Я виртуальный помощник Smilekit. "
-                "Могу проконсультировать по продукции и помочь с заказом. "
-                "Что хотите уточнить?"
-            )
-            await message.answer(start_text)
+            chat_id = message.chat.id
+            storage.clear_chat(chat_id)
+            await message.answer(templates.PRODUCT_INFO)
+            await bot.send_chat_action(chat_id, ChatAction.TYPING)
+            await asyncio.sleep(random.uniform(0.6, 1.0))
+            await message.answer(templates.CITY_QUESTION)
             storage.add_exchange(
-                message.chat.id, message.message_id, "/start", start_text, "command"
+                chat_id, message.message_id, "/start",
+                f"{templates.PRODUCT_INFO}\n\n{templates.CITY_QUESTION}", "command",
             )
+            storage.schedule_daily_nudge(chat_id, time.time() + DAILY_NUDGE_INTERVAL_SECONDS)
+            task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
+            follow_up_tasks.add(task)
+            task.add_done_callback(follow_up_tasks.discard)
 
     @dp.message(Command("reset"))
     async def reset(message: Message) -> None:
