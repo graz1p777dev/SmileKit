@@ -59,19 +59,18 @@ def test_payload_carries_structured_fields():
 
 
 def test_unknown_fields_stay_null():
-    payload = build_order_payload(7, supervisor())
+    payload = build_order_payload(7, supervisor(contact_phone="0700123456"))
     assert payload["quantity"] is None
     assert payload["totalAmount"] is None
     assert payload["currency"] is None
     assert payload["city"] is None
-    assert payload["customerPhone"] is None
     assert payload["summary"] == "1 коробка, Бишкек"
 
 
 def test_invalid_values_are_dropped_not_guessed():
     payload = build_order_payload(
         7,
-        supervisor(quantity=0, total_amount=-5, currency="EUR", city="   "),
+        supervisor(quantity=0, total_amount=-5, currency="EUR", city="   ", contact_phone="0700123456"),
     )
     assert payload["quantity"] is None
     assert payload["totalAmount"] is None
@@ -81,11 +80,17 @@ def test_invalid_values_are_dropped_not_guessed():
 
 def test_manager_phone_never_becomes_customer_phone():
     payload = build_order_payload(7, supervisor(contact_phone=f"+996 {MANAGER_CONTACT[1:]}"))
-    assert payload["customerPhone"] is None
+    assert payload is None
+
+
+def test_no_payload_until_phone_is_collected():
+    """order_summary иногда заполняется рано (клиент просто согласился купить,
+    телефон ещё не назвал) — без реального телефона платёж запрашивать рано."""
+    assert build_order_payload(7, supervisor()) is None
 
 
 def test_telegram_username_is_the_fallback_contact():
-    payload = build_order_payload(7, supervisor(), telegram_username="fallback")
+    payload = build_order_payload(7, supervisor(contact_phone="0700123456"), telegram_username="fallback")
     assert payload["customerUsername"] == "fallback"
 
 
@@ -93,7 +98,7 @@ def test_telegram_username_is_the_fallback_contact():
 
 
 def test_same_order_gives_same_key_even_if_summary_rephrased():
-    fields = dict(quantity=1, total_amount=1490, currency="KGS", city="Бишкек")
+    fields = dict(quantity=1, total_amount=1490, currency="KGS", city="Бишкек", contact_phone="0700123456")
     first = build_order_payload(42, supervisor("1 коробка в Бишкек", **fields))
     second = build_order_payload(42, supervisor("Заказ: одна коробка, Бишкек", **fields))
     assert first["externalKey"] == second["externalKey"]
@@ -106,9 +111,9 @@ def test_changed_order_gives_new_key():
 
 
 def test_key_is_per_chat():
-    order = OrderDetails(quantity=1, city="Бишкек")
-    first = build_order_payload(1, supervisor(quantity=1, city="Бишкек"))
-    second = build_order_payload(2, supervisor(quantity=1, city="Бишкек"))
+    order = OrderDetails(quantity=1, city="Бишкек", contact_phone="0700123456")
+    first = build_order_payload(1, supervisor(quantity=1, city="Бишкек", contact_phone="0700123456"))
+    second = build_order_payload(2, supervisor(quantity=1, city="Бишкек", contact_phone="0700123456"))
     assert order_fingerprint(order) in first["externalKey"]
     assert first["externalKey"] != second["externalKey"]
 

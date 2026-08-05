@@ -109,20 +109,27 @@ def build_order_payload(
 ) -> dict | None:
     """Собирает тело запроса или возвращает None, если заказа ещё нет.
 
-    Признак заказа — непустой order_summary: гипервизор заполняет его только
-    после того, как клиент действительно начал оформление.
+    Признак заказа — непустой order_summary И реальный телефон клиента.
+    Гипервизор иногда заполняет order_summary рано (клиент просто согласился
+    на скидку/покупку, но телефон ещё не назвал) — без проверки телефона
+    бот в этот момент уже шлёт QR на оплату, хотя сам же ещё просит имя и
+    номер. Телефон — минимальный сигнал, что данные для доставки реально
+    начали собираться, а не просто устное согласие.
     """
     summary = _text(supervisor.order_summary, MAX_SUMMARY)
     if summary is None:
         return None
-
     order = supervisor.order
+    phone = _phone(order.contact_phone)
+    if phone is None:
+        return None
+
     username = _text(order.contact_username, 120) or _text(telegram_username, 120)
     return {
         "externalKey": f"telegram:{chat_id}:order:{order_fingerprint(order)}",
         "source": "telegram_bot",
         "customerName": _text(customer_name),
-        "customerPhone": _phone(order.contact_phone),
+        "customerPhone": phone,
         "customerUsername": username.lstrip("@") if username else None,
         "telegramChatId": chat_id,
         "quantity": _quantity(order.quantity),
