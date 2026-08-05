@@ -14,3 +14,17 @@ def test_other_kg_cities_use_yldam_express():
 def test_unrecognized_city_returns_none():
     assert templates.delivery_template_for_city("Алматы") is None
     assert templates.delivery_template_for_city("не знаю") is None
+
+
+def test_currency_for_history_detects_country_by_city():
+    assert templates.currency_for_history(["Я из Бишкека"]) == "KGS"
+    assert templates.currency_for_history(["Пишу из Алматы"]) == "KZT"
+    assert templates.currency_for_history(["Живу в Ташкенте"]) == "UZS"
+    assert templates.currency_for_history([]) == "KGS"
+
+
+def test_daily_discount_offer_uses_matching_price_line():
+    assert "1290 сом" in templates.daily_discount_offer("KGS")
+    assert "155000 сум" in templates.daily_discount_offer("UZS")
+    assert "7000 тенге" in templates.daily_discount_offer("KZT")
+    assert "скидку 13%" in templates.daily_discount_offer()

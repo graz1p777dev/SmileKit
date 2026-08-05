@@ -50,3 +50,24 @@ def classify_objection(text: str) -> str | None:
     if _EXPENSIVE_OBJECTION.search(text):
         return "expensive"
     return None
+
+
+_PROMISED_DAYS = re.compile(r"через\s+(\d+)\s*д(?:ень|ня|ней)\b", re.IGNORECASE)
+_PROMISED_WEEK = re.compile(r"через\s+недел|на\s+следующей\s+недел", re.IGNORECASE)
+_PROMISED_DAY_AFTER_TOMORROW = re.compile(r"послезавтра", re.IGNORECASE)
+_PROMISED_TOMORROW = re.compile(r"завтра", re.IGNORECASE)
+
+
+def promised_delay_hours(text: str) -> float | None:
+    """Клиент сам назвал момент, когда вернётся («завтра зп — закажу») —
+    напоминание ставится на этот момент вместо обычной цепочки простоя."""
+    match = _PROMISED_DAYS.search(text)
+    if match:
+        return float(match.group(1)) * 24
+    if _PROMISED_DAY_AFTER_TOMORROW.search(text):
+        return 48.0
+    if _PROMISED_TOMORROW.search(text):
+        return 24.0
+    if _PROMISED_WEEK.search(text):
+        return 7 * 24.0
+    return None

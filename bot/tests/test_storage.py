@@ -167,6 +167,47 @@ def test_clear_chat_removes_nudge_follow_ups(tmp_path):
     storage.close()
 
 
+def test_promised_follow_up_replaces_chain_and_fires_at_exact_time(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    storage.schedule_nudge_chain(1, now=1000.0)
+    storage.schedule_promised_follow_up(1, due_at=1000.0 + 24 * 3600)
+    assert storage.due_nudge_follow_ups(now=1000.0 + 23 * 3600) == []
+    due = storage.due_nudge_follow_ups(now=1000.0 + 24 * 3600)
+    assert [kind for _id, _chat, kind in due] == ["promised"]
+    storage.close()
+
+
+def test_nudge_follow_ups_table_migrates_old_check_constraint(tmp_path):
+    path = tmp_path / "bot.db"
+    storage = BotStorage(str(path))
+    storage.close()
+
+    import sqlite3
+    raw = sqlite3.connect(path)
+    raw.execute("DROP TABLE nudge_follow_ups")
+    raw.execute(
+        """
+        CREATE TABLE nudge_follow_ups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('hours', 'day', 'last', 'order_incomplete')),
+            due_at REAL NOT NULL,
+            sent_at REAL
+        )
+        """
+    )
+    raw.execute("INSERT INTO nudge_follow_ups (chat_id, kind, due_at) VALUES (1, 'hours', 500.0)")
+    raw.commit()
+    raw.close()
+
+    reopened = BotStorage(str(path))
+    due = reopened.due_nudge_follow_ups(now=500.0)
+    assert [kind for _id, _chat, kind in due] == ["hours"]
+    reopened.schedule_promised_follow_up(2, due_at=600.0)
+    assert [kind for _id, _chat, kind in reopened.due_nudge_follow_ups(now=600.0) if _chat == 2] == ["promised"]
+    reopened.close()
+
+
 def test_incoming_message_count(tmp_path):
     storage = BotStorage(str(tmp_path / "bot.db"))
     assert storage.incoming_message_count(1) == 0

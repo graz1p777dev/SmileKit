@@ -207,12 +207,14 @@ async def test_order_intent_is_written_by_ai(tmp_path):
 
 
 class FakeRouteResponses:
-    """Мок только для route(): отдельный формат ответа (function_call),
-    не пересекается с FakeResponses.create()/.parse() для reply()."""
+    """Мок только для route()/verify_receipt(): отдельный формат ответа
+    (function_call), не пересекается с FakeResponses.create()/.parse() для
+    reply()."""
 
-    def __init__(self, function_call: dict | None = None, fail=False):
+    def __init__(self, function_call: dict | None = None, fail=False, function_name="send_template"):
         self.function_call = function_call
         self.fail = fail
+        self.function_name = function_name
         self.create_kwargs = None
 
     def create(self, **kwargs):
@@ -223,7 +225,7 @@ class FakeRouteResponses:
             return SimpleNamespace(output=[])
         item = SimpleNamespace(
             type="function_call",
-            name="send_template",
+            name=self.function_name,
             arguments=json.dumps(self.function_call),
         )
         return SimpleNamespace(output=[item])
@@ -301,6 +303,17 @@ def test_classify_objection_detects_thinking_and_expensive():
     assert classify_objection("Надо подумать") == "thinking"
     assert classify_objection("Ой, дороговато для меня") == "expensive"
     assert classify_objection("Как использовать?") is None
+
+
+def test_promised_delay_hours_detects_relative_time():
+    from smilekit_bot.sales import promised_delay_hours
+
+    assert promised_delay_hours("завтра зп- сразу закажу") == 24.0
+    assert promised_delay_hours("скажу в течение завтрашнего дня") == 24.0
+    assert promised_delay_hours("послезавтра отвечу") == 48.0
+    assert promised_delay_hours("через 3 дня отпишусь") == 72.0
+    assert promised_delay_hours("напишу через неделю") == 168.0
+    assert promised_delay_hours("хорошо, спасибо") is None
 
 
 def test_fill_nudge_template_substitutes_and_falls_back():

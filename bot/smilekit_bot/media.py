@@ -65,4 +65,7 @@ def result_photo_group() -> list[InputMediaPhoto]:
         InputMediaPhoto(
             media=FSInputFile(RESULTS_DIR / "after.jpg"),
         ),
+        InputMediaPhoto(
+            media=FSInputFile(RESULTS_DIR / "resultotzyv.jpeg"),
+        ),
     ]

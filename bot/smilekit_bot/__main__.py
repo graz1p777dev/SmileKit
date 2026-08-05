@@ -5,11 +5,12 @@ import random
 import time
 from collections import defaultdict
 from io import BytesIO
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ChatAction
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message
+from aiogram.types import FSInputFile, Message
 from aiohttp import web
 
 from .api import create_app, effective_settings
@@ -24,7 +25,7 @@ from .crm import (
 from . import templates
 from .media import result_photo_group, should_send_results_after_city, wants_result_photos
 from .outgoing import split_outgoing_messages
-from .sales import classify_objection, wants_to_order
+from .sales import classify_objection, promised_delay_hours, wants_to_order
 from .service import SmilekitAssistant
 from .storage import BotStorage
 
@@ -60,6 +61,12 @@ DAILY_NUDGE_CHECK_INTERVAL_SECONDS = 15 * 60
 # консультацией — на второй ступени цепочки простоя другой текст.
 CONSULTATION_MESSAGE_THRESHOLD = 3
 NUDGE_CHECK_INTERVAL_SECONDS = 15 * 60
+QR_CODE_PATH = Path(__file__).resolve().parent.parent / "assets" / "qrcode.jpeg"
+# Дожим по оплате: QR не шлём повторно, только переспрашиваем; после
+# нескольких напоминаний останавливаемся — менеджер разберётся вручную,
+# когда клиент всё же пришлёт чек.
+AWAITING_PAYMENT_REMINDER_DELAY_SECONDS = 2 * 60 * 60
+AWAITING_PAYMENT_MAX_REMINDERS = 3
 
 
 async def main() -> None:
@@ -115,9 +122,12 @@ async def main() -> None:
             now = time.time()
             for chat_id in storage.due_daily_nudges(now, DAILY_NUDGE_MAX_SENDS):
                 try:
+                    currency = templates.currency_for_history(
+                        [item.content for item in storage.history(chat_id)]
+                    )
                     await bot.send_chat_action(chat_id, ChatAction.TYPING)
                     await asyncio.sleep(random.uniform(0.6, 1.0))
-                    await bot.send_message(chat_id, templates.DAILY_DISCOUNT_OFFER)
+                    await bot.send_message(chat_id, templates.daily_discount_offer(currency))
                 except Exception:
                     logging.exception("Daily nudge send failed chat=%s", chat_id)
                 storage.advance_daily_nudge(chat_id, now + DAILY_NUDGE_INTERVAL_SECONDS)
@@ -130,6 +140,19 @@ async def main() -> None:
             now = time.time()
             for _id, chat_id, kind in storage.due_nudge_follow_ups(now):
                 try:
+                    if kind == "awaiting_payment":
+                        pending = storage.get_pending_payment(chat_id)
+                        if pending is None:
+                            continue  # уже оплатил или отменили — дожимать нечего
+                        count = storage.increment_payment_reminder(chat_id)
+                        await bot.send_chat_action(chat_id, ChatAction.TYPING)
+                        await asyncio.sleep(random.uniform(0.6, 1.0))
+                        await bot.send_message(chat_id, templates.AWAITING_PAYMENT_REMINDER)
+                        if count < AWAITING_PAYMENT_MAX_REMINDERS:
+                            storage.schedule_awaiting_payment_reminder(
+                                chat_id, now + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
+                            )
+                        continue
                     if kind == "day" and storage.incoming_message_count(chat_id) >= CONSULTATION_MESSAGE_THRESHOLD:
                         template = templates.AFTER_CONSULT_FOLLOWUP
                     else:
@@ -138,6 +161,7 @@ async def main() -> None:
                             "day": templates.NEXT_DAY_FOLLOWUP,
                             "last": templates.LAST_MESSAGE_FOLLOWUP,
                             "order_incomplete": templates.ORDER_INCOMPLETE_FOLLOWUP,
+                            "promised": templates.PROMISED_FOLLOWUP,
                         }[kind]
                     author = await bot.get_chat(chat_id)
                     text = templates.fill_nudge_template(template, author.first_name)
@@ -154,13 +178,15 @@ async def main() -> None:
             await crm.advance_stage(chat_id, "order")
 
     async def push_order(message: Message, supervisor) -> bool:
-        """Отправляет клиенту инструкцию+благодарность и заказ в CRM.
+        """Запрашивает оплату по QR и заводит заказ в CRM.
 
+        Инструкцию и благодарность бот присылает не сразу, а после того как
+        клиент пришлёт чек и он пройдёт проверку (см. handle_photo).
         Ответ клиенту уже отправлен и ждать сеть не должен, поэтому CRM-задача
         не ожидается здесь: результат и ошибки уходят в лог внутри send_order.
         Клиентские сообщения claim_event-дедуплицированы по составу заказа —
         повторное подтверждение того же состава (тот же externalKey) их не
-        повторит, а изменившийся состав — новый заказ, новая благодарность.
+        повторит, а изменившийся состав — новый заказ, новый запрос оплаты.
         """
         author = message.from_user
         payload = build_order_payload(
@@ -175,18 +201,56 @@ async def main() -> None:
         storage.cancel_daily_nudge(chat_id)
         storage.cancel_nudge_follow_ups(chat_id)
         if storage.claim_event(chat_id, f"order_thanks:{payload['externalKey']}"):
+            amount = payload.get("totalAmount") or (1490 * (payload.get("quantity") or 1))
+            currency = payload.get("currency") or "KGS"
+            storage.save_pending_payment(
+                chat_id,
+                order_summary=payload.get("summary") or "",
+                amount=amount,
+                currency=currency,
+                customer_name=payload.get("customerName"),
+                customer_phone=payload.get("customerPhone"),
+                city=payload.get("city"),
+            )
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.6, 1.0))
-            await message.answer(templates.USAGE_INSTRUCTIONS)
-            await bot.send_chat_action(chat_id, ChatAction.TYPING)
-            await asyncio.sleep(random.uniform(0.6, 1.0))
-            await message.answer(templates.THANK_YOU_ORDER)
+            await message.answer(templates.PAYMENT_QR_MESSAGE)
+            if QR_CODE_PATH.exists():
+                await bot.send_photo(chat_id, FSInputFile(QR_CODE_PATH))
+            else:
+                logging.warning("QR code file missing at %s — assets/qrcode.jpeg not provided", QR_CODE_PATH)
+            storage.schedule_awaiting_payment_reminder(
+                chat_id, time.time() + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
+            )
         if not crm.enabled:
             return True
         task = asyncio.create_task(_submit_order_and_advance(message.chat.id, payload))
         crm_tasks.add(task)
         task.add_done_callback(crm_tasks.discard)
         return True
+
+    async def push_to_delivery_group(payment: dict, receipt_file_id: str) -> None:
+        """Пересылает оплаченный заказ доставщикам вместе с чеком клиента.
+
+        Группа доставки (WhatsApp) ещё не готова — заглушка: без
+        DELIVERY_GROUP_CHAT_ID просто логирует детали заказа, ничего не
+        теряя, пока канал не подключат.
+        """
+        caption = (
+            f"Новый оплаченный заказ 📦\n"
+            f"Имя: {payment.get('customer_name') or '—'}\n"
+            f"Телефон: {payment.get('customer_phone') or '—'}\n"
+            f"Город/адрес: {payment.get('city') or '—'}\n"
+            f"Что взял: {payment.get('order_summary') or '—'}\n"
+            f"Сумма: {payment.get('amount')} {payment.get('currency') or ''}"
+        )
+        if settings.delivery_group_chat_id:
+            await bot.send_photo(settings.delivery_group_chat_id, receipt_file_id, caption=caption)
+        else:
+            logging.warning(
+                "Delivery group not configured yet (DELIVERY_GROUP_CHAT_ID=0). Order details:\n%s",
+                caption,
+            )
 
     def push_deal(message: Message, *, is_new_conversation: bool) -> None:
         """Заводит сделку в CRM при первом сообщении клиента этому боту."""
@@ -237,6 +301,19 @@ async def main() -> None:
         await bot.download_file(telegram_file.file_path, destination=output)
         return output.getvalue()
 
+    def schedule_idle_follow_up(chat_id: int, promised_hours: float | None) -> None:
+        """QR уже отправлен и чек ещё не пришёл — дожим по оплате важнее
+        обычной цепочки простоя. Иначе — клиент сам назвал момент возврата
+        («завтра зп — закажу»): напоминание ставится точно на этот момент."""
+        if storage.get_pending_payment(chat_id) is not None:
+            storage.schedule_awaiting_payment_reminder(
+                chat_id, time.time() + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
+            )
+        elif promised_hours is not None:
+            storage.schedule_promised_follow_up(chat_id, time.time() + promised_hours * 3600)
+        else:
+            storage.schedule_nudge_chain(chat_id, time.time())
+
     async def process(
         message: Message,
         text: str,
@@ -259,6 +336,10 @@ async def main() -> None:
         if kind == "text":
             push_stage(message, text)
 
+        # Клиент сам назвал момент, когда вернётся («завтра зп — закажу») —
+        # напоминание ставим точно на этот момент, а не обычную цепочку.
+        promised_hours = promised_delay_hours(text) if kind == "text" else None
+
         # Явное возражение («я подумаю», «дорого») — готовый ответ вместо
         # полноценной генерации: быстрее, дешевле, звучит последовательно.
         if kind == "text" and not is_new_conversation:
@@ -271,18 +352,20 @@ async def main() -> None:
                     "Objection template chat=%s message=%s objection=%s",
                     chat_id, message.message_id, objection,
                 )
-                storage.schedule_nudge_chain(chat_id, time.time())
+                schedule_idle_follow_up(chat_id, promised_hours)
                 return
 
         # Первый контакт — готовый сценарий без обращения к ИИ вообще:
         # экономия полного цикла черновик+проверка на каждый новый диалог.
-        if kind == "text" and is_new_conversation:
+        # Не важно, чем клиент написал первым — текстом, фото или голосовым.
+        if is_new_conversation:
             await message.answer(templates.PRODUCT_INFO)
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.6, 1.0))
             await message.answer(templates.CITY_QUESTION)
             storage.add_exchange(
-                chat_id, message.message_id, text,
+                chat_id, message.message_id,
+                f"[{kind}] {text}" if kind != "text" else text,
                 f"{templates.PRODUCT_INFO}\n\n{templates.CITY_QUESTION}", kind,
             )
             storage.schedule_daily_nudge(chat_id, time.time() + DAILY_NUDGE_INTERVAL_SECONDS)
@@ -313,7 +396,7 @@ async def main() -> None:
                 task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
                 follow_up_tasks.add(task)
                 task.add_done_callback(follow_up_tasks.discard)
-                storage.schedule_nudge_chain(chat_id, time.time())
+                schedule_idle_follow_up(chat_id, promised_hours)
                 return
 
         reply = await assistant.reply(
@@ -364,7 +447,7 @@ async def main() -> None:
             if kind == "text" and wants_to_order(text):
                 storage.schedule_order_incomplete_nudge(chat_id, time.time())
             else:
-                storage.schedule_nudge_chain(chat_id, time.time())
+                schedule_idle_follow_up(chat_id, promised_hours)
         if kind == "text" and wants_result_photos(text):
             await message.answer("Вот результат нашего клиента до и после применения 👇")
             await bot.send_media_group(chat_id, media=result_photo_group())
@@ -417,10 +500,48 @@ async def main() -> None:
             storage.clear_chat(message.chat.id)
             await message.answer("Диалог и сохранённая память очищены.")
 
+    async def handle_receipt_photo(message: Message, pending: dict) -> None:
+        """Ждём чек по активному заказу — проверяем сумму вместо обычного
+        разбора фото ИИ-менеджером."""
+        chat_id = message.chat.id
+        try:
+            photo = await download(message.photo[-1].file_id)
+            encoded = base64.b64encode(photo).decode("ascii")
+            result = await assistant.verify_receipt(
+                f"data:image/jpeg;base64,{encoded}",
+                expected_amount=pending["amount"],
+                currency=pending["currency"] or "KGS",
+            )
+        except Exception:
+            logging.exception("Receipt verification crashed chat=%s", chat_id)
+            result = {"looks_like_receipt": False, "amount_matches": False}
+
+        if result.get("looks_like_receipt") and result.get("amount_matches"):
+            storage.clear_pending_payment(chat_id)
+            storage.cancel_nudge_follow_ups(chat_id)
+            await bot.send_chat_action(chat_id, ChatAction.TYPING)
+            await asyncio.sleep(random.uniform(0.6, 1.0))
+            await message.answer(templates.USAGE_INSTRUCTIONS)
+            await bot.send_chat_action(chat_id, ChatAction.TYPING)
+            await asyncio.sleep(random.uniform(0.6, 1.0))
+            await message.answer(templates.THANK_YOU_ORDER)
+            task = asyncio.create_task(push_to_delivery_group(pending, message.photo[-1].file_id))
+            crm_tasks.add(task)
+            task.add_done_callback(crm_tasks.discard)
+        else:
+            await message.answer(templates.RECEIPT_MISMATCH)
+            storage.schedule_awaiting_payment_reminder(
+                chat_id, time.time() + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
+            )
+
     @dp.message(F.photo)
     async def handle_photo(message: Message) -> None:
         async with locks[message.chat.id]:
             if not await claim(message):
+                return
+            pending_payment = storage.get_pending_payment(message.chat.id)
+            if pending_payment is not None:
+                await handle_receipt_photo(message, pending_payment)
                 return
             try:
                 photo = await download(message.photo[-1].file_id)

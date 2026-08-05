@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     # текущей openai_model. По умолчанию пусто: единственная разрешённая модель —
     # та, что уже сконфигурирована в openai_model.
     bot_allowed_models: str = ""
+    # Telegram-группа доставщиков, куда бот шлёт оплаченный заказ с чеком.
+    # 0 = заглушка: группа ещё не создана, детали заказа только в логах.
+    delivery_group_chat_id: int = 0
 
     model_config = SettingsConfigDict(
         env_file=".env",

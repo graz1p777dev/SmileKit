@@ -8,11 +8,11 @@
 """
 
 PRODUCT_INFO = (
-    "Здравствуйте.\n\n"
-    "1490 сом 🇰🇬\n\n"
-    "В коробке 14 полосок.\n\n"
-    "Эффект после 1 применения.\n\n"
-    "Мы гарантируем ✅"
+    "Здравствуйте \n"
+    "1490 сом🇰🇬\n\n"
+    "В КОРОБКЕ 14 ПОЛОСОК\n"
+    "Эффект после 1 применения \n"
+    "МЫ ГАРАНТИРУЕМ ✅"
 )
 
 CITY_QUESTION = "Подскажите, пожалуйста, из какого вы города?"
@@ -29,10 +29,36 @@ DELIVERY_OTHER_KG = (
     "За 1 день доставим прямо до дома"
 )
 
-DAILY_DISCOUNT_OFFER = (
-    "Кстати, у нас осталось буквально 2 упаковки, поэтому мы отдаём их "
-    "со скидкой 10% 😉. Оформить вам доставку?"
-)
+# Клиент пишет из Казахстана/Узбекистана — своя валюта в рассылке; по
+# умолчанию (КР, Россия и остальные) — сомы, это домашний рынок.
+_KZ_CURRENCY_MARKERS = ("алмат", "астан", "шымкент", "казахст")
+_UZ_CURRENCY_MARKERS = ("ташкент", "узбекист", "самарканд", "бухар", "андижан", "наманган", "фергана")
+
+_DAILY_DISCOUNT_PRICE_LINES = {
+    "KGS": "За 1290 сом🇰🇬",
+    "UZS": "За 155000 сум🇺🇿",
+    "KZT": "За 7000 тенге🇰🇿",
+}
+
+
+def currency_for_history(texts: list[str]) -> str:
+    normalized = " ".join(text.lower() for text in texts)
+    if any(marker in normalized for marker in _KZ_CURRENCY_MARKERS):
+        return "KZT"
+    if any(marker in normalized for marker in _UZ_CURRENCY_MARKERS):
+        return "UZS"
+    return "KGS"
+
+
+def daily_discount_offer(currency: str = "KGS") -> str:
+    price_line = _DAILY_DISCOUNT_PRICE_LINES.get(currency, _DAILY_DISCOUNT_PRICE_LINES["KGS"])
+    return (
+        "Кстати, остались 3 пачки, и на них сделаем скидку 13%\n"
+        f"{price_line}\n\n"
+        "Если давно смущает желтизна зубов на фото или вживую — это можно "
+        "быстро исправить, результат уже за 30 минут 😍\n"
+        "Оформить вам одну пачку?"
+    )
 
 EFFECT_DURATION = "Эффект держится в среднем 3–5 месяцев 😊"
 
@@ -77,6 +103,11 @@ ORDER_INCOMPLETE_FOLLOWUP = (
     "Хотите продолжить или заказ уже неактуален?"
 )
 
+PROMISED_FOLLOWUP = (
+    "Здравствуйте, {client_name}! Как и договаривались, пишу уточнить — "
+    "получилось определиться с заказом {product_name}?"
+)
+
 THINKING_REPLY = (
     "Хорошо, понимаю. Подскажите только, что пока останавливает: цена, "
     "сомнения в результате или хотите сравнить с другими вариантами?"
@@ -88,6 +119,21 @@ EXPENSIVE_REPLY = (
 )
 
 PRODUCT_NAME = "Smilekit"
+
+PAYMENT_QR_MESSAGE = (
+    "Для оформления заказа оплатите, пожалуйста, по QR-коду ниже и пришлите "
+    "сюда фото или скриншот чека 🙏"
+)
+
+AWAITING_PAYMENT_REMINDER = (
+    "Здравствуйте! Оплатили заказ? Жду фото чека, чтобы передать его в "
+    "доставку 🙏"
+)
+
+RECEIPT_MISMATCH = (
+    "Не получилось распознать оплату на чеке. Проверьте, пожалуйста, что "
+    "сумма верная, и пришлите чек ещё раз."
+)
 
 
 def fill_nudge_template(template: str, client_name: str | None) -> str:

@@ -17,6 +17,35 @@ LOGGER = logging.getLogger(__name__)
 DRAFT_TIMEOUT_SECONDS = 20
 REVIEW_TIMEOUT_SECONDS = 15
 ROUTE_TIMEOUT_SECONDS = 8
+RECEIPT_CHECK_TIMEOUT_SECONDS = 20
+
+RECEIPT_CHECK_PROMPT = (
+    "Ты проверяешь фото чека оплаты клиента Smilekit. Сравни сумму платежа "
+    "на чеке с ожидаемой суммой заказа, указанной в сообщении. Если сумма "
+    "отличается от ожидаемой — это несовпадение. Если фото вообще не похоже "
+    "на банковский чек или квитанцию об оплате — looks_like_receipt=false."
+)
+
+RECEIPT_TOOL = {
+    "type": "function",
+    "name": "submit_receipt_check",
+    "description": "Сообщить результат проверки чека оплаты.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "looks_like_receipt": {
+                "type": "boolean",
+                "description": "На фото похоже на банковский чек/квитанцию об оплате, а не случайная картинка.",
+            },
+            "amount_matches": {
+                "type": "boolean",
+                "description": "Сумма платежа на чеке совпадает с ожидаемой суммой заказа.",
+            },
+        },
+        "required": ["looks_like_receipt", "amount_matches"],
+        "additionalProperties": False,
+    },
+}
 
 # Роутер шаблонов: дешёвый вызов с function calling вместо полного цикла
 # черновик+проверка там, где ответ и так один и тот же готовый текст.
@@ -190,6 +219,55 @@ class SmilekitAssistant:
             except (json.JSONDecodeError, AttributeError):
                 return None
         return None
+
+    async def verify_receipt(
+        self, image_data_url: str, expected_amount: float, currency: str
+    ) -> dict:
+        """Проверяет фото чека: похоже ли на квитанцию и совпадает ли сумма.
+
+        При любом сбое считает чек непроверенным — бот попросит прислать
+        чек ещё раз, а не пропускает оплату молча.
+        """
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._verify_receipt, image_data_url, expected_amount, currency),
+                timeout=RECEIPT_CHECK_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            LOGGER.exception("Receipt verification failed")
+            return {"looks_like_receipt": False, "amount_matches": False}
+
+    def _verify_receipt(self, image_data_url: str, expected_amount: float, currency: str) -> dict:
+        response = self.client.responses.create(
+            model=self.model,
+            reasoning={"effort": "low"},
+            instructions=RECEIPT_CHECK_PROMPT,
+            input=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": f"Ожидаемая сумма заказа: {expected_amount} {currency}.",
+                    },
+                    {"type": "input_image", "image_url": image_data_url, "detail": "high"},
+                ],
+            }],
+            tools=[RECEIPT_TOOL],
+            tool_choice={"type": "function", "name": "submit_receipt_check"},
+            store=False,
+        )
+        for item in response.output:
+            if getattr(item, "type", None) != "function_call" or item.name != "submit_receipt_check":
+                continue
+            try:
+                result = json.loads(item.arguments)
+                return {
+                    "looks_like_receipt": bool(result.get("looks_like_receipt")),
+                    "amount_matches": bool(result.get("amount_matches")),
+                }
+            except (json.JSONDecodeError, AttributeError):
+                break
+        return {"looks_like_receipt": False, "amount_matches": False}
 
     async def transcribe(
         self, audio: bytes, filename: str, model: str = "gpt-transcribe"

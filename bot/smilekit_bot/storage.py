@@ -73,15 +73,56 @@ class BotStorage:
                 CREATE TABLE IF NOT EXISTS nudge_follow_ups (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id INTEGER NOT NULL,
-                    kind TEXT NOT NULL CHECK (kind IN ('hours', 'day', 'last', 'order_incomplete')),
+                    kind TEXT NOT NULL CHECK (kind IN ('hours', 'day', 'last', 'order_incomplete', 'promised', 'awaiting_payment')),
                     due_at REAL NOT NULL,
                     sent_at REAL
                 );
                 CREATE INDEX IF NOT EXISTS nudge_follow_ups_pending_idx
                     ON nudge_follow_ups(chat_id, sent_at);
+                CREATE TABLE IF NOT EXISTS pending_payments (
+                    chat_id INTEGER PRIMARY KEY,
+                    order_summary TEXT NOT NULL,
+                    amount REAL,
+                    currency TEXT,
+                    customer_name TEXT,
+                    customer_phone TEXT,
+                    city TEXT,
+                    reminder_count INTEGER NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL
+                );
                 """
             )
             self._db.commit()
+            self._migrate_nudge_follow_ups_promised_kind()
+
+    def _migrate_nudge_follow_ups_promised_kind(self) -> None:
+        """CREATE TABLE IF NOT EXISTS не меняет CHECK на уже существующей
+        таблице — на проде она была заведена без 'promised'/'awaiting_payment'.
+        Пересоздаём таблицу с сохранением данных, если старый CHECK ещё не
+        обновлён."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'nudge_follow_ups'"
+            ).fetchone()
+            if row and "'promised'" not in row["sql"]:
+                self._db.executescript(
+                    """
+                    ALTER TABLE nudge_follow_ups RENAME TO nudge_follow_ups_old;
+                    CREATE TABLE nudge_follow_ups (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        chat_id INTEGER NOT NULL,
+                        kind TEXT NOT NULL CHECK (kind IN ('hours', 'day', 'last', 'order_incomplete', 'promised', 'awaiting_payment')),
+                        due_at REAL NOT NULL,
+                        sent_at REAL
+                    );
+                    INSERT INTO nudge_follow_ups (id, chat_id, kind, due_at, sent_at)
+                        SELECT id, chat_id, kind, due_at, sent_at FROM nudge_follow_ups_old;
+                    DROP TABLE nudge_follow_ups_old;
+                    CREATE INDEX IF NOT EXISTS nudge_follow_ups_pending_idx
+                        ON nudge_follow_ups(chat_id, sent_at);
+                    """
+                )
+                self._db.commit()
 
     def get_bot_setting(self, key: str) -> str | None:
         """Сохранённый override настройки бота или None, если его нет.
@@ -249,6 +290,7 @@ class BotStorage:
             self._db.execute("DELETE FROM sent_events WHERE chat_id = ?", (chat_id,))
             self._db.execute("DELETE FROM daily_nudges WHERE chat_id = ?", (chat_id,))
             self._db.execute("DELETE FROM nudge_follow_ups WHERE chat_id = ?", (chat_id,))
+            self._db.execute("DELETE FROM pending_payments WHERE chat_id = ?", (chat_id,))
             self._db.commit()
 
     def schedule_daily_nudge(self, chat_id: int, next_due_at: float) -> None:
@@ -311,6 +353,28 @@ class BotStorage:
             )
             self._db.commit()
 
+    def schedule_promised_follow_up(self, chat_id: int, due_at: float) -> None:
+        """Клиент сам назвал момент, когда вернётся («завтра зп — закажу») —
+        напоминание ставится точно на этот момент вместо обычной цепочки."""
+        self.cancel_nudge_follow_ups(chat_id)
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO nudge_follow_ups (chat_id, kind, due_at) VALUES (?, 'promised', ?)",
+                (chat_id, due_at),
+            )
+            self._db.commit()
+
+    def schedule_awaiting_payment_reminder(self, chat_id: int, due_at: float) -> None:
+        """QR отправлен, чек ещё не пришёл — бот сам переспросит об оплате,
+        не присылая QR повторно."""
+        self.cancel_nudge_follow_ups(chat_id)
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO nudge_follow_ups (chat_id, kind, due_at) VALUES (?, 'awaiting_payment', ?)",
+                (chat_id, due_at),
+            )
+            self._db.commit()
+
     def cancel_nudge_follow_ups(self, chat_id: int) -> None:
         with self._lock:
             self._db.execute(
@@ -344,6 +408,61 @@ class BotStorage:
                 (chat_id,),
             ).fetchone()
         return row["count"] if row else 0
+
+    def save_pending_payment(
+        self,
+        chat_id: int,
+        *,
+        order_summary: str,
+        amount: float | None,
+        currency: str | None,
+        customer_name: str | None,
+        customer_phone: str | None,
+        city: str | None,
+    ) -> None:
+        with self._lock:
+            self._db.execute(
+                """
+                INSERT INTO pending_payments
+                    (chat_id, order_summary, amount, currency, customer_name, customer_phone, city, reminder_count, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    order_summary = excluded.order_summary,
+                    amount = excluded.amount,
+                    currency = excluded.currency,
+                    customer_name = excluded.customer_name,
+                    customer_phone = excluded.customer_phone,
+                    city = excluded.city,
+                    reminder_count = 0,
+                    created_at = excluded.created_at
+                """,
+                (chat_id, order_summary, amount, currency, customer_name, customer_phone, city, time.time()),
+            )
+            self._db.commit()
+
+    def get_pending_payment(self, chat_id: int) -> dict | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM pending_payments WHERE chat_id = ?", (chat_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def increment_payment_reminder(self, chat_id: int) -> int:
+        with self._lock:
+            self._db.execute(
+                "UPDATE pending_payments SET reminder_count = reminder_count + 1 WHERE chat_id = ?",
+                (chat_id,),
+            )
+            self._db.commit()
+            row = self._db.execute(
+                "SELECT reminder_count FROM pending_payments WHERE chat_id = ?", (chat_id,)
+            ).fetchone()
+        return row["reminder_count"] if row else 0
+
+    def clear_pending_payment(self, chat_id: int) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM pending_payments WHERE chat_id = ?", (chat_id,))
+            self._db.commit()
 
     def close(self) -> None:
         with self._lock:
