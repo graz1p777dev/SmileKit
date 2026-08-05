@@ -57,6 +57,15 @@ def test_persistent_event_is_claimed_once(tmp_path):
     reopened.close()
 
 
+def test_has_event_does_not_consume_it(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    assert not storage.has_event(1, "discount_offered")
+    assert storage.claim_event(1, "discount_offered")
+    assert storage.has_event(1, "discount_offered")
+    assert storage.has_event(1, "discount_offered")  # повторная проверка не потребляет событие
+    storage.close()
+
+
 def test_new_message_cancels_pending_follow_up(tmp_path):
     storage = BotStorage(str(tmp_path / "bot.db"))
     assert storage.claim_message(1, 100)

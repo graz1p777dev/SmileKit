@@ -45,6 +45,7 @@ ROUTED_TEMPLATES = {
     "safety_composition": templates.SAFETY_COMPOSITION,
     "single_piece_purchase": templates.SINGLE_PIECE_POLICY,
     "discount_offer": templates.DISCOUNT_OFFER,
+    "usage_instructions": templates.USAGE_INSTRUCTIONS,
 }
 # Клиент часто пишет мыслями через несколько сообщений подряд (видно на
 # живых чатах). Без этого окна каждое такое сообщение уходило в отдельный
@@ -64,6 +65,7 @@ DAILY_NUDGE_CHECK_INTERVAL_SECONDS = 15 * 60
 CONSULTATION_MESSAGE_THRESHOLD = 3
 NUDGE_CHECK_INTERVAL_SECONDS = 15 * 60
 QR_CODE_PATH = Path(__file__).resolve().parent.parent / "assets" / "qrcode.jpeg"
+INSTRUCTIONS_IMAGE_PATH = Path(__file__).resolve().parent.parent / "assets" / "instructia.jpeg"
 # Дожим по оплате: QR не шлём повторно, только переспрашиваем; после
 # нескольких напоминаний останавливаемся — менеджер разберётся вручную,
 # когда клиент всё же пришлёт чек.
@@ -203,7 +205,11 @@ async def main() -> None:
         storage.cancel_daily_nudge(chat_id)
         storage.cancel_nudge_follow_ups(chat_id)
         if storage.claim_event(chat_id, f"order_thanks:{payload['externalKey']}"):
-            amount = payload.get("totalAmount") or (1490 * (payload.get("quantity") or 1))
+            # ИИ не всегда фиксирует итоговую сумму при индивидуальной
+            # скидке — если её нет, но скидка предлагалась в этом диалоге,
+            # это надёжнее как дефолт, чем полная цена.
+            default_amount = 1190 if storage.has_event(chat_id, "discount_offered") else 1490
+            amount = payload.get("totalAmount") or (default_amount * (payload.get("quantity") or 1))
             currency = payload.get("currency") or "KGS"
             storage.save_pending_payment(
                 chat_id,
@@ -231,7 +237,7 @@ async def main() -> None:
         task.add_done_callback(crm_tasks.discard)
         return True
 
-    async def push_to_delivery_group(payment: dict, receipt_file_id: str) -> None:
+    async def push_to_delivery_group(payment: dict, receipt_file_id: str, receipt_kind: str = "image") -> None:
         """Пересылает оплаченный заказ доставщикам вместе с чеком клиента.
 
         Группа доставки (WhatsApp) ещё не готова — заглушка: без
@@ -247,7 +253,10 @@ async def main() -> None:
             f"Сумма: {payment.get('amount')} {payment.get('currency') or ''}"
         )
         if settings.delivery_group_chat_id:
-            await bot.send_photo(settings.delivery_group_chat_id, receipt_file_id, caption=caption)
+            if receipt_kind == "pdf":
+                await bot.send_document(settings.delivery_group_chat_id, receipt_file_id, caption=caption)
+            else:
+                await bot.send_photo(settings.delivery_group_chat_id, receipt_file_id, caption=caption)
         else:
             logging.warning(
                 "Delivery group not configured yet (DELIVERY_GROUP_CHAT_ID=0). Order details:\n%s",
@@ -393,6 +402,8 @@ async def main() -> None:
                 template_id = None
             template_text = ROUTED_TEMPLATES.get(template_id)
             if template_text:
+                if template_id == "usage_instructions" and INSTRUCTIONS_IMAGE_PATH.exists():
+                    await bot.send_photo(chat_id, FSInputFile(INSTRUCTIONS_IMAGE_PATH))
                 await message.answer(template_text)
                 storage.add_exchange(chat_id, message.message_id, text, template_text, kind)
                 logging.info(
@@ -521,17 +532,20 @@ async def main() -> None:
             storage.clear_chat(message.chat.id)
             await message.answer("Диалог и сохранённая память очищены.")
 
-    async def handle_receipt_photo(message: Message, pending: dict) -> None:
-        """Ждём чек по активному заказу — проверяем сумму вместо обычного
-        разбора фото ИИ-менеджером."""
+    async def handle_receipt_file(
+        message: Message, pending: dict, *, file_id: str, file_bytes: bytes, kind: str
+    ) -> None:
+        """Ждём чек по активному заказу (фото или PDF) — проверяем сумму
+        вместо обычного разбора вложения ИИ-менеджером."""
         chat_id = message.chat.id
         try:
-            photo = await download(message.photo[-1].file_id)
-            encoded = base64.b64encode(photo).decode("ascii")
+            encoded = base64.b64encode(file_bytes).decode("ascii")
+            mime = "application/pdf" if kind == "pdf" else "image/jpeg"
             result = await assistant.verify_receipt(
-                f"data:image/jpeg;base64,{encoded}",
+                f"data:{mime};base64,{encoded}",
                 expected_amount=pending["amount"],
                 currency=pending["currency"] or "KGS",
+                kind=kind,
             )
         except Exception:
             logging.exception("Receipt verification crashed chat=%s", chat_id)
@@ -542,11 +556,13 @@ async def main() -> None:
             storage.cancel_nudge_follow_ups(chat_id)
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.6, 1.0))
+            if INSTRUCTIONS_IMAGE_PATH.exists():
+                await bot.send_photo(chat_id, FSInputFile(INSTRUCTIONS_IMAGE_PATH))
             await message.answer(templates.USAGE_INSTRUCTIONS)
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.6, 1.0))
             await message.answer(templates.THANK_YOU_ORDER)
-            task = asyncio.create_task(push_to_delivery_group(pending, message.photo[-1].file_id))
+            task = asyncio.create_task(push_to_delivery_group(pending, file_id, kind))
             crm_tasks.add(task)
             task.add_done_callback(crm_tasks.discard)
         else:
@@ -562,7 +578,11 @@ async def main() -> None:
                 return
             pending_payment = storage.get_pending_payment(message.chat.id)
             if pending_payment is not None:
-                await handle_receipt_photo(message, pending_payment)
+                photo_bytes = await download(message.photo[-1].file_id)
+                await handle_receipt_file(
+                    message, pending_payment,
+                    file_id=message.photo[-1].file_id, file_bytes=photo_bytes, kind="image",
+                )
                 return
             try:
                 photo = await download(message.photo[-1].file_id)
@@ -580,6 +600,37 @@ async def main() -> None:
                     "Не получилось обработать фото. "
                     "Попробуйте отправить его ещё раз немного позже."
                 )
+
+    @dp.message(F.document)
+    async def handle_document(message: Message) -> None:
+        async with locks[message.chat.id]:
+            if not await claim(message):
+                return
+            pending_payment = storage.get_pending_payment(message.chat.id)
+            document = message.document
+            is_pdf = bool(
+                document
+                and (document.mime_type == "application/pdf" or (document.file_name or "").lower().endswith(".pdf"))
+            )
+            if pending_payment is not None and is_pdf:
+                try:
+                    pdf_bytes = await download(document.file_id)
+                except Exception:
+                    logging.exception("Receipt PDF download failed chat=%s", message.chat.id)
+                    await message.answer(templates.RECEIPT_MISMATCH)
+                    return
+                await handle_receipt_file(
+                    message, pending_payment,
+                    file_id=document.file_id, file_bytes=pdf_bytes, kind="pdf",
+                )
+                return
+            if pending_payment is not None:
+                await message.answer(templates.RECEIPT_MISMATCH)
+                return
+            await message.answer(
+                "Такой файл пока не могу обработать. Опишите вопрос текстом "
+                "или пришлите фото."
+            )
 
     @dp.message(F.voice | F.audio)
     async def handle_audio(message: Message) -> None:

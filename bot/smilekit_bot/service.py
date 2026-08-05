@@ -20,10 +20,15 @@ ROUTE_TIMEOUT_SECONDS = 8
 RECEIPT_CHECK_TIMEOUT_SECONDS = 20
 
 RECEIPT_CHECK_PROMPT = (
-    "Ты проверяешь фото чека оплаты клиента Smilekit. Сравни сумму платежа "
-    "на чеке с ожидаемой суммой заказа, указанной в сообщении. Если сумма "
-    "отличается от ожидаемой — это несовпадение. Если фото вообще не похоже "
-    "на банковский чек или квитанцию об оплате — looks_like_receipt=false."
+    "Ты проверяешь чек оплаты клиента Smilekit (фото или PDF). Сравни сумму "
+    "платежа на чеке с ожидаемой суммой заказа, указанной в сообщении. "
+    "Менеджер мог согласовать с клиентом индивидуальную скидку чуть ниже "
+    "ожидаемой суммы — это нормально: считай amount_matches=true, если сумма "
+    "на чеке точно равна ожидаемой либо меньше её не более чем на 300 (в той "
+    "же валюте). Сумму намного меньше ожидаемой (похоже на оплату одной "
+    "штуки, а не всего заказа) или больше ожидаемой считай несовпадением. "
+    "Если файл вообще не похож на банковский чек или квитанцию об оплате — "
+    "looks_like_receipt=false."
 )
 
 RECEIPT_TOOL = {
@@ -71,6 +76,7 @@ ROUTE_TOOL = {
                     "safety_composition",
                     "single_piece_purchase",
                     "discount_offer",
+                    "usage_instructions",
                 ],
                 "description": (
                     "effect_duration — клиент спрашивает, на сколько хватает эффекта, "
@@ -80,7 +86,9 @@ ROUTE_TOOL = {
                     "single_piece_purchase — клиент хочет купить одну полоску или "
                     "меньше целой коробки. "
                     "discount_offer — клиент прямо просит скидку или говорит, что ему "
-                    "не хватает денег на полную цену."
+                    "не хватает денег на полную цену. "
+                    "usage_instructions — клиент спрашивает, как пользоваться, как "
+                    "наносить полоски или как применять продукт."
                 ),
             }
         },
@@ -230,23 +238,36 @@ class SmilekitAssistant:
         return None
 
     async def verify_receipt(
-        self, image_data_url: str, expected_amount: float, currency: str
+        self,
+        file_data_url: str,
+        expected_amount: float,
+        currency: str,
+        *,
+        kind: str = "image",
     ) -> dict:
-        """Проверяет фото чека: похоже ли на квитанцию и совпадает ли сумма.
+        """Проверяет чек (фото или PDF): похоже ли на квитанцию и совпадает
+        ли сумма.
 
         При любом сбое считает чек непроверенным — бот попросит прислать
         чек ещё раз, а не пропускает оплату молча.
         """
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(self._verify_receipt, image_data_url, expected_amount, currency),
+                asyncio.to_thread(self._verify_receipt, file_data_url, expected_amount, currency, kind),
                 timeout=RECEIPT_CHECK_TIMEOUT_SECONDS,
             )
         except Exception:
             LOGGER.exception("Receipt verification failed")
             return {"looks_like_receipt": False, "amount_matches": False}
 
-    def _verify_receipt(self, image_data_url: str, expected_amount: float, currency: str) -> dict:
+    def _verify_receipt(
+        self, file_data_url: str, expected_amount: float, currency: str, kind: str
+    ) -> dict:
+        file_content = (
+            {"type": "input_image", "image_url": file_data_url, "detail": "high"}
+            if kind == "image"
+            else {"type": "input_file", "filename": "receipt.pdf", "file_data": file_data_url}
+        )
         response = self.client.responses.create(
             model=self.model,
             reasoning={"effort": "low"},
@@ -258,7 +279,7 @@ class SmilekitAssistant:
                         "type": "input_text",
                         "text": f"Ожидаемая сумма заказа: {expected_amount} {currency}.",
                     },
-                    {"type": "input_image", "image_url": image_data_url, "detail": "high"},
+                    file_content,
                 ],
             }],
             tools=[RECEIPT_TOOL],

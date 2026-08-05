@@ -196,6 +196,16 @@ class BotStorage:
             self._db.commit()
             return cursor.rowcount == 1
 
+    def has_event(self, chat_id: int, event: str) -> bool:
+        """Как claim_event, но не потребляет событие — только проверяет,
+        было ли оно уже отправлено этому чату."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT 1 FROM sent_events WHERE chat_id = ? AND event = ? LIMIT 1",
+                (chat_id, event),
+            ).fetchone()
+        return row is not None
+
     def has_message_after(self, chat_id: int, message_id: int) -> bool:
         with self._lock:
             row = self._db.execute(
