@@ -43,6 +43,8 @@ RATE_LIMIT_TEXT = (
 ROUTED_TEMPLATES = {
     "effect_duration": templates.EFFECT_DURATION,
     "safety_composition": templates.SAFETY_COMPOSITION,
+    "single_piece_purchase": templates.SINGLE_PIECE_POLICY,
+    "discount_offer": templates.DISCOUNT_OFFER,
 }
 # Клиент часто пишет мыслями через несколько сообщений подряд (видно на
 # живых чатах). Без этого окна каждое такое сообщение уходило в отдельный
@@ -385,6 +387,10 @@ async def main() -> None:
         # (срок эффекта, состав) — шлём его напрямую, без полного цикла ИИ.
         if kind == "text":
             template_id = await assistant.route(text, history, model=current_settings["model"])
+            if template_id == "discount_offer" and not storage.claim_event(chat_id, "discount_offered"):
+                # Скидку предлагаем только один раз за диалог — повторную
+                # просьбу пусть обработает обычная генерация по контексту.
+                template_id = None
             template_text = ROUTED_TEMPLATES.get(template_id)
             if template_text:
                 await message.answer(template_text)

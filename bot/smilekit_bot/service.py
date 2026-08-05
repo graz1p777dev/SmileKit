@@ -66,12 +66,21 @@ ROUTE_TOOL = {
         "properties": {
             "template_id": {
                 "type": "string",
-                "enum": ["effect_duration", "safety_composition"],
+                "enum": [
+                    "effect_duration",
+                    "safety_composition",
+                    "single_piece_purchase",
+                    "discount_offer",
+                ],
                 "description": (
                     "effect_duration — клиент спрашивает, на сколько хватает эффекта, "
                     "сколько он держится или сколько длится результат. "
                     "safety_composition — клиент спрашивает про состав, безопасность "
-                    "состава, вред для эмали или дёсен."
+                    "состава, вред для эмали или дёсен. "
+                    "single_piece_purchase — клиент хочет купить одну полоску или "
+                    "меньше целой коробки. "
+                    "discount_offer — клиент прямо просит скидку или говорит, что ему "
+                    "не хватает денег на полную цену."
                 ),
             }
         },

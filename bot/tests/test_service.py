@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from smilekit_bot import templates
 from smilekit_bot.models import ChatMessage, CrmAction, SupervisorResult
 from smilekit_bot.media import should_send_results_after_city, wants_result_photos
 from smilekit_bot.prompts import MANAGER_PROMPT, SUPERVISOR_PROMPT
@@ -257,14 +258,23 @@ def test_prompts_require_confident_brand_voice_without_internal_wording():
     assert "старший онлайн-менеджер Smilekit" in MANAGER_PROMPT
     assert "Не отвечай шаблонно" in MANAGER_PROMPT
     assert "Молча восстанови наиболее вероятный смысл" in MANAGER_PROMPT
-    assert "не добавляй комплектацию" in MANAGER_PROMPT
+    assert "ниже 1190 сом не опускайся" in MANAGER_PROMPT
     assert "ОБЯЗАТЕЛЬНО разделяй ответ" in MANAGER_PROMPT
     assert "очевидный вопрос" in SUPERVISOR_PROMPT
     assert "меню тем" in SUPERVISOR_PROMPT
-    assert "добавил условия доставки" in SUPERVISOR_PROMPT
+    assert "любую другую цену или процент исправляй через rewrite" in SUPERVISOR_PROMPT
     assert "разные смысловые части слиты" in SUPERVISOR_PROMPT
     assert "возврате со стороны Smilekit" in SUPERVISOR_PROMPT
     assert "по данным компании" in SUPERVISOR_PROMPT
+
+
+def test_discount_and_single_piece_are_routed_templates():
+    """Обе сцены теперь готовые шаблоны через роутер, а не длинные абзацы в
+    промпте — промпт лишь коротко ссылается на роутер как на первичный путь."""
+    assert "перехватывает роутер" in MANAGER_PROMPT
+    assert "перехватывает роутер" in SUPERVISOR_PROMPT
+    assert "1190 сом" in templates.DISCOUNT_OFFER
+    assert "оштучно" in templates.SINGLE_PIECE_POLICY
 
 
 def test_explicit_photo_request_is_detected():
