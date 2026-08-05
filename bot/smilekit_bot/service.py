@@ -73,6 +73,7 @@ ROUTE_TOOL = {
                 "type": "string",
                 "enum": [
                     "effect_duration",
+                    "first_use_effect",
                     "safety_composition",
                     "single_piece_purchase",
                     "discount_offer",
@@ -81,6 +82,8 @@ ROUTE_TOOL = {
                 "description": (
                     "effect_duration — клиент спрашивает, на сколько хватает эффекта, "
                     "сколько он держится или сколько длится результат. "
+                    "first_use_effect — клиент спрашивает, какой будет эффект или что "
+                    "будет с зубами после применения (не про то, сколько эффект держится). "
                     "safety_composition — клиент спрашивает про состав, безопасность "
                     "состава, вред для эмали или дёсен. "
                     "single_piece_purchase — клиент хочет купить одну полоску или "

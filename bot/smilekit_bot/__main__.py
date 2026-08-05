@@ -42,6 +42,7 @@ RATE_LIMIT_TEXT = (
 # template_id из assistant.route() -> готовый текст.
 ROUTED_TEMPLATES = {
     "effect_duration": templates.EFFECT_DURATION,
+    "first_use_effect": templates.FIRST_USE_EFFECT,
     "safety_composition": templates.SAFETY_COMPOSITION,
     "single_piece_purchase": templates.SINGLE_PIECE_POLICY,
     "discount_offer": templates.DISCOUNT_OFFER,
