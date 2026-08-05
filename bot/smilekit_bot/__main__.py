@@ -425,6 +425,27 @@ async def main() -> None:
         # иначе ИИ сам отвечает про доставку и просит оформить заказ, а этот
         # блок дублирует то же самое вторым сообщением.
         if auto_result_photos and storage.claim_event(chat_id, "results_after_city"):
+            # Клиент мог написать город и заодно ещё что-то спросить в том же
+            # сообщении — сперва полноценный ответ ИИ на этот вопрос, потом
+            # тот же готовый хвост (доставка, результаты, эффект, CTA).
+            if "?" in text:
+                reply = await assistant.reply(
+                    text, history,
+                    customer_memory=memory,
+                    image_data_url=image_data_url,
+                    manager_prompt=current_settings["managerPrompt"],
+                    supervisor_prompt=current_settings["supervisorPrompt"],
+                    model=current_settings["model"],
+                )
+                for index, part in enumerate(split_outgoing_messages(reply.text)):
+                    if index:
+                        await bot.send_chat_action(chat_id, ChatAction.TYPING)
+                        await asyncio.sleep(min(2.0, max(0.7, len(part) / 55)) + random.uniform(0.0, 0.35))
+                    await message.answer(part)
+                storage.update_memory(chat_id, reply.supervisor.customer_memory, reply.supervisor.order_summary)
+                await bot.send_chat_action(chat_id, ChatAction.TYPING)
+                await asyncio.sleep(random.uniform(0.6, 1.0))
+
             # Сперва прямой ответ на то, что подразумевает названный город
             # (доставка), и только потом результаты — не наоборот.
             delivery_text = templates.delivery_template_for_city(text)
