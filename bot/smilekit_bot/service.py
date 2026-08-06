@@ -7,6 +7,7 @@ from pathlib import Path
 from openai import OpenAI
 
 from .models import AssistantReply, ChatMessage, CrmAction, SupervisorResult
+from .privacy import apply_mapping, build_mapping, restore_mapping
 from .prompts import MANAGER_PROMPT, SUPERVISOR_PROMPT
 
 
@@ -117,6 +118,22 @@ ROUTE_TOOL = {
 }
 
 
+def _restore_supervisor_pii(result: SupervisorResult, mapping: dict[str, str]) -> SupervisorResult:
+    """Подставляет реальные телефон/адрес/имя обратно в поля супервизора
+    после того, как модель отработала на плейсхолдерах вместо PII."""
+    if not mapping:
+        return result
+    result.corrected_response = restore_mapping(result.corrected_response, mapping) or ""
+    result.handoff_reason = restore_mapping(result.handoff_reason, mapping) or ""
+    result.customer_memory = restore_mapping(result.customer_memory, mapping) or ""
+    result.order_summary = restore_mapping(result.order_summary, mapping) or ""
+    result.crm_action.note = restore_mapping(result.crm_action.note, mapping) or ""
+    result.issues = [restore_mapping(issue, mapping) or issue for issue in result.issues]
+    result.order.contact_phone = restore_mapping(result.order.contact_phone, mapping)
+    result.order.city = restore_mapping(result.order.city, mapping)
+    return result
+
+
 class SmilekitAssistant:
     def __init__(
         self,
@@ -150,13 +167,25 @@ class SmilekitAssistant:
         effective_manager_prompt = manager_prompt or MANAGER_PROMPT
         effective_supervisor_prompt = supervisor_prompt or SUPERVISOR_PROMPT
         effective_model = model or self.model
+
+        # Телефон/адрес/имя клиента не должны уходить в OpenAI как есть —
+        # заменяем на плейсхолдеры перед генерацией и подставляем обратно
+        # в готовый ответ ниже (см. reply.text / restore_supervisor_pii).
+        pii_mapping = build_mapping(message, customer_memory, *(item.content for item in history))
+        redacted_message = apply_mapping(message, pii_mapping)
+        redacted_history = [
+            ChatMessage(role=item.role, content=apply_mapping(item.content, pii_mapping))
+            for item in history
+        ]
+        redacted_memory = apply_mapping(customer_memory, pii_mapping)
+
         try:
             draft = await asyncio.wait_for(
                 asyncio.to_thread(
                     self._draft,
-                    message,
-                    history,
-                    customer_memory,
+                    redacted_message,
+                    redacted_history,
+                    redacted_memory,
                     image_data_url,
                     effective_manager_prompt,
                     effective_model,
@@ -183,10 +212,10 @@ class SmilekitAssistant:
             review = await asyncio.wait_for(
                 asyncio.to_thread(
                     self._review,
-                    message,
-                    history,
+                    redacted_message,
+                    redacted_history,
                     draft,
-                    customer_memory,
+                    redacted_memory,
                     image_data_url,
                     effective_supervisor_prompt,
                     effective_model,
@@ -212,6 +241,8 @@ class SmilekitAssistant:
             text = draft
         elif review.status == "rewrite":
             text = review.corrected_response.strip() or FALLBACK_TEXT
+        text = restore_mapping(text, pii_mapping)
+        review = _restore_supervisor_pii(review, pii_mapping)
         return AssistantReply(text=text, supervisor=review)
 
     async def route(
@@ -220,9 +251,15 @@ class SmilekitAssistant:
         """template_id, если сообщение точно попадает под готовый шаблон,
         иначе None — тогда reply() идёт по обычному пути. Никогда не бросает
         исключение наружу: сбой роутера не должен ронять обычный ответ."""
+        mapping = build_mapping(message, *(item.content for item in history))
+        redacted_message = apply_mapping(message, mapping)
+        redacted_history = [
+            ChatMessage(role=item.role, content=apply_mapping(item.content, mapping))
+            for item in history
+        ]
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(self._route, message, history, model),
+                asyncio.to_thread(self._route, redacted_message, redacted_history, model),
                 timeout=ROUTE_TIMEOUT_SECONDS,
             )
         except Exception:
