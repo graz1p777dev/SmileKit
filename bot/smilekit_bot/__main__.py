@@ -25,7 +25,13 @@ from .crm import (
 from . import templates
 from .media import result_photo_group, should_send_results_after_city, wants_result_photos
 from .outgoing import split_outgoing_messages
-from .sales import classify_objection, promised_delay_hours, wants_to_order
+from .sales import (
+    classify_objection,
+    is_complaint,
+    promised_delay_hours,
+    wants_payment_info,
+    wants_to_order,
+)
 from .service import SmilekitAssistant
 from .storage import BotStorage
 
@@ -67,11 +73,30 @@ CONSULTATION_MESSAGE_THRESHOLD = 3
 NUDGE_CHECK_INTERVAL_SECONDS = 15 * 60
 QR_CODE_PATH = Path(__file__).resolve().parent.parent / "assets" / "qrcode.jpeg"
 INSTRUCTIONS_IMAGE_PATH = Path(__file__).resolve().parent.parent / "assets" / "instructia.jpeg"
+EFFECT_PHOTO_PATH = Path(__file__).resolve().parent.parent / "assets" / "results" / "after.jpg"
 # Дожим по оплате: QR не шлём повторно, только переспрашиваем; после
 # нескольких напоминаний останавливаемся — менеджер разберётся вручную,
 # когда клиент всё же пришлёт чек.
 AWAITING_PAYMENT_REMINDER_DELAY_SECONDS = 2 * 60 * 60
 AWAITING_PAYMENT_MAX_REMINDERS = 3
+# Ночью (Бишкек, UTC+6) рассылку про оплату не шлём — переносим на утро.
+QUIET_HOURS_START_BISHKEK = 22
+QUIET_HOURS_END_BISHKEK = 9
+BISHKEK_UTC_OFFSET_SECONDS = 6 * 3600
+
+
+def next_allowed_send_time(now: float) -> float | None:
+    """None, если сейчас можно слать; иначе — момент (09:00 по Бишкеку),
+    когда тихие часы закончатся."""
+    shifted = now + BISHKEK_UTC_OFFSET_SECONDS
+    hour = int(shifted // 3600) % 24
+    if not (hour >= QUIET_HOURS_START_BISHKEK or hour < QUIET_HOURS_END_BISHKEK):
+        return None
+    day_start = shifted - (shifted % 86400)
+    target = day_start + QUIET_HOURS_END_BISHKEK * 3600
+    if target <= shifted:
+        target += 86400
+    return target - BISHKEK_UTC_OFFSET_SECONDS
 
 
 async def main() -> None:
@@ -123,7 +148,10 @@ async def main() -> None:
             return
         await bot.send_chat_action(chat_id, ChatAction.TYPING)
         await asyncio.sleep(random.uniform(0.8, 1.3))
-        await bot.send_message(chat_id, templates.FIRST_USE_EFFECT)
+        if EFFECT_PHOTO_PATH.exists():
+            await bot.send_photo(chat_id, FSInputFile(EFFECT_PHOTO_PATH), caption=templates.FIRST_USE_EFFECT)
+        else:
+            await bot.send_message(chat_id, templates.FIRST_USE_EFFECT)
 
     async def check_daily_nudges() -> None:
         while True:
@@ -153,10 +181,17 @@ async def main() -> None:
                         pending = storage.get_pending_payment(chat_id)
                         if pending is None:
                             continue  # уже оплатил или отменили — дожимать нечего
+                        resume_at = next_allowed_send_time(now)
+                        if resume_at is not None:
+                            # Ночь по Бишкеку — не пишем, переносим на утро,
+                            # счётчик попыток не тратим.
+                            storage.schedule_awaiting_payment_reminder(chat_id, resume_at)
+                            continue
                         count = storage.increment_payment_reminder(chat_id)
                         await bot.send_chat_action(chat_id, ChatAction.TYPING)
                         await asyncio.sleep(random.uniform(0.6, 1.0))
-                        await bot.send_message(chat_id, templates.AWAITING_PAYMENT_REMINDER)
+                        variant = templates.AWAITING_PAYMENT_REMINDERS[(count - 1) % len(templates.AWAITING_PAYMENT_REMINDERS)]
+                        await bot.send_message(chat_id, variant)
                         if count < AWAITING_PAYMENT_MAX_REMINDERS:
                             storage.schedule_awaiting_payment_reminder(
                                 chat_id, now + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
@@ -356,6 +391,47 @@ async def main() -> None:
         # напоминание ставим точно на этот момент, а не обычную цепочку.
         promised_hours = promised_delay_hours(text) if kind == "text" else None
 
+        # Явное недовольство — не додумываем причину и не извиняемся вслепую:
+        # прямо спрашиваем, что случилось, и сразу шлём важное уведомление в
+        # CRM, чтобы разобрался человек, а не бот.
+        if kind == "text" and not is_new_conversation and is_complaint(text):
+            await message.answer(templates.COMPLAINT_PROMPT)
+            storage.add_exchange(chat_id, message.message_id, text, templates.COMPLAINT_PROMPT, kind)
+            task = asyncio.create_task(crm.notify_important(
+                title="Жалоба клиента (Smilekit)",
+                body=f"Сообщение клиента: {text}",
+                chat_id=chat_id,
+            ))
+            crm_tasks.add(task)
+            task.add_done_callback(crm_tasks.discard)
+            logging.info("Complaint detected chat=%s message=%s", chat_id, message.message_id)
+            schedule_idle_follow_up(chat_id, promised_hours)
+            return
+
+        # Клиент прямо спрашивает реквизиты/куда платить — раньше это уходило
+        # в свободную генерацию, и та просто называла номер менеджера вместо
+        # того, чтобы сразу дать QR.
+        if kind == "text" and wants_payment_info(text) and storage.get_pending_payment(chat_id) is None:
+            default_amount = 1190 if storage.has_event(chat_id, "discount_offered") else 1490
+            storage.save_pending_payment(
+                chat_id,
+                order_summary="Клиент запросил реквизиты оплаты",
+                amount=default_amount,
+                currency="KGS",
+                customer_name=None,
+                customer_phone=None,
+                city=None,
+            )
+            if QR_CODE_PATH.exists():
+                await bot.send_photo(chat_id, FSInputFile(QR_CODE_PATH))
+            await message.answer(templates.PAYMENT_INFO_REQUEST)
+            storage.add_exchange(chat_id, message.message_id, text, templates.PAYMENT_INFO_REQUEST, kind)
+            storage.schedule_awaiting_payment_reminder(
+                chat_id, time.time() + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
+            )
+            logging.info("Payment info requested chat=%s message=%s", chat_id, message.message_id)
+            return
+
         # Явное возражение («я подумаю», «дорого») — готовый ответ вместо
         # полноценной генерации: быстрее, дешевле, звучит последовательно.
         if kind == "text" and not is_new_conversation:
@@ -409,6 +485,8 @@ async def main() -> None:
             if template_text:
                 if template_id == "usage_instructions" and INSTRUCTIONS_IMAGE_PATH.exists():
                     await bot.send_photo(chat_id, FSInputFile(INSTRUCTIONS_IMAGE_PATH))
+                elif template_id == "first_use_effect" and EFFECT_PHOTO_PATH.exists():
+                    await bot.send_photo(chat_id, FSInputFile(EFFECT_PHOTO_PATH))
                 await message.answer(template_text)
                 storage.add_exchange(chat_id, message.message_id, text, template_text, kind)
                 logging.info(

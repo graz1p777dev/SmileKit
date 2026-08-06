@@ -396,6 +396,24 @@ def test_fill_nudge_template_substitutes_and_falls_back():
     assert "Smilekit" in without_name
 
 
+def test_wants_payment_info_detects_requisites_questions():
+    from smilekit_bot.sales import wants_payment_info
+
+    assert wants_payment_info("Реквизиты")
+    assert wants_payment_info("Куда скинуть?")
+    assert wants_payment_info("как оплатить можно")
+    assert not wants_payment_info("Сколько стоит?")
+
+
+def test_is_complaint_detects_explicit_negativity():
+    from smilekit_bot.sales import is_complaint
+
+    assert is_complaint("Это развод какой-то, верните деньги")
+    assert is_complaint("Ужасно, никогда больше не куплю")
+    assert not is_complaint("Дороговато для меня")
+    assert not is_complaint("Как использовать полоски?")
+
+
 @pytest.mark.asyncio
 async def test_photo_is_sent_as_multimodal_input(tmp_path):
     review = SupervisorResult(status="approved", risk_level="low")

@@ -30,6 +30,7 @@ LOGGER = logging.getLogger(__name__)
 
 ORDER_PATH = "/api/internal/orders"
 DEALS_PATH = "/api/internal/deals"
+NOTIFY_PATH = "/api/internal/notify"
 REQUEST_TIMEOUT = 10.0
 CURRENCIES = {"KGS", "USD", "RUB"}
 MAX_QUANTITY = 1000
@@ -267,5 +268,26 @@ class CrmClient:
             return False
         except Exception:
             LOGGER.exception("CRM stage advance failed chat=%s action=%s", chat_id, action)
+            return False
+        return True
+
+    async def notify_important(self, *, title: str, body: str, chat_id: int) -> bool:
+        """Важное уведомление в CRM — жалоба или сообщение, которое должен
+        разобрать человек (не автоответ). Никогда не бросает исключение
+        наружу: сбой не должен мешать боту ответить клиенту."""
+        if not self.enabled:
+            return False
+        payload = {
+            "type": "system",
+            "title": title,
+            "body": body,
+            "isImportant": True,
+            "sourceType": "telegram_bot",
+            "sourceId": f"telegram:{chat_id}",
+        }
+        try:
+            await asyncio.to_thread(self._request, "POST", NOTIFY_PATH, payload)
+        except Exception:
+            LOGGER.exception("CRM notify failed chat=%s title=%s", chat_id, title)
             return False
         return True

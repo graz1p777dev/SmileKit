@@ -71,3 +71,30 @@ def promised_delay_hours(text: str) -> float | None:
     if _PROMISED_WEEK.search(text):
         return 7 * 24.0
     return None
+
+
+_PAYMENT_INFO_REQUEST = re.compile(
+    r"реквизит|куда\s+(?:скинуть|перевести|переводить|оплатить|платить)|"
+    r"номер\s+(?:карты|счёта|счета)|как\s+оплатить|способ\s+оплаты",
+    re.IGNORECASE,
+)
+
+
+def wants_payment_info(text: str) -> bool:
+    """Клиент прямо спрашивает, куда/как платить — сразу шлём QR, а не
+    номер менеджера через свободную генерацию."""
+    return bool(_PAYMENT_INFO_REQUEST.search(text))
+
+
+_COMPLAINT_MARKERS = re.compile(
+    r"развод|обман(?:ули)?|кинул|мошенник|верните\s+деньги|хочу\s+возврат|"
+    r"ужасн(?:о|ый|ая)|отвратительн|никогда\s+(?:больше\s+)?не\s+куплю|"
+    r"плохо\s+сработал|не\s+помогл|это\s+не\s+то|разочарован",
+    re.IGNORECASE,
+)
+
+
+def is_complaint(text: str) -> bool:
+    """Явное недовольство — не додумываем причину, прямо спрашиваем её и
+    сохраняем в CRM, чтобы менеджер разобрался."""
+    return bool(_COMPLAINT_MARKERS.search(text))
