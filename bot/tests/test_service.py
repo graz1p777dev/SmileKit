@@ -254,62 +254,69 @@ async def test_route_failure_returns_none_instead_of_raising(tmp_path):
     assert result is None
 
 
+_FULL_MATCH = {
+    "is_real_receipt_screenshot": True,
+    "amount_ok": True,
+    "recipient_ok": True,
+    "date_ok": True,
+}
+_UNVERIFIED = {
+    "is_real_receipt_screenshot": False,
+    "amount_ok": False,
+    "recipient_ok": False,
+    "date_ok": False,
+}
+
+
 @pytest.mark.asyncio
 async def test_verify_receipt_returns_match_on_function_call(tmp_path):
-    responses = FakeRouteResponses(
-        {"looks_like_receipt": True, "amount_matches": True},
-        function_name="submit_receipt_check",
-    )
+    responses = FakeRouteResponses(_FULL_MATCH, function_name="submit_receipt_check")
     result = await assistant(tmp_path, responses).verify_receipt(
-        "data:image/jpeg;base64,abc", expected_amount=1490, currency="KGS"
+        "data:image/jpeg;base64,abc", "2026-08-06"
     )
-    assert result == {"looks_like_receipt": True, "amount_matches": True}
+    assert result == _FULL_MATCH
     assert responses.create_kwargs["tools"][0]["name"] == "submit_receipt_check"
+    assert "2026-08-06" in responses.create_kwargs["input"][0]["content"][0]["text"]
 
 
 @pytest.mark.asyncio
 async def test_verify_receipt_accepts_pdf_kind(tmp_path):
-    responses = FakeRouteResponses(
-        {"looks_like_receipt": True, "amount_matches": True},
-        function_name="submit_receipt_check",
-    )
+    responses = FakeRouteResponses(_FULL_MATCH, function_name="submit_receipt_check")
     result = await assistant(tmp_path, responses).verify_receipt(
-        "data:application/pdf;base64,abc", expected_amount=1490, currency="KGS", kind="pdf"
+        "data:application/pdf;base64,abc", "2026-08-06", kind="pdf"
     )
-    assert result == {"looks_like_receipt": True, "amount_matches": True}
+    assert result == _FULL_MATCH
     content = responses.create_kwargs["input"][0]["content"]
     assert content[1]["type"] == "input_file"
     assert content[1]["file_data"] == "data:application/pdf;base64,abc"
 
 
 @pytest.mark.asyncio
-async def test_verify_receipt_reports_amount_mismatch(tmp_path):
-    responses = FakeRouteResponses(
-        {"looks_like_receipt": True, "amount_matches": False},
-        function_name="submit_receipt_check",
-    )
+async def test_verify_receipt_reports_recipient_mismatch(tmp_path):
+    mismatch = {**_FULL_MATCH, "recipient_ok": False}
+    responses = FakeRouteResponses(mismatch, function_name="submit_receipt_check")
     result = await assistant(tmp_path, responses).verify_receipt(
-        "data:image/jpeg;base64,abc", expected_amount=1490, currency="KGS"
+        "data:image/jpeg;base64,abc", "2026-08-06"
     )
-    assert result == {"looks_like_receipt": True, "amount_matches": False}
+    assert result == mismatch
 
 
 @pytest.mark.asyncio
 async def test_verify_receipt_without_function_call_is_unverified(tmp_path):
     responses = FakeRouteResponses(None, function_name="submit_receipt_check")
     result = await assistant(tmp_path, responses).verify_receipt(
-        "data:image/jpeg;base64,abc", expected_amount=1490, currency="KGS"
+        "data:image/jpeg;base64,abc", "2026-08-06"
     )
-    assert result == {"looks_like_receipt": False, "amount_matches": False}
+    assert result == _UNVERIFIED
 
 
 @pytest.mark.asyncio
 async def test_verify_receipt_failure_returns_unverified_instead_of_raising(tmp_path):
     responses = FakeRouteResponses(fail=True, function_name="submit_receipt_check")
     result = await assistant(tmp_path, responses).verify_receipt(
-        "data:image/jpeg;base64,abc", expected_amount=1490, currency="KGS"
+        "data:image/jpeg;base64,abc", "2026-08-06"
     )
-    assert result == {"looks_like_receipt": False, "amount_matches": False}
+    assert result == _UNVERIFIED
 
 
 def test_prompts_require_confident_brand_voice_without_internal_wording():

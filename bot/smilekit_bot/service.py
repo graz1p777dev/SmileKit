@@ -19,35 +19,51 @@ REVIEW_TIMEOUT_SECONDS = 15
 ROUTE_TIMEOUT_SECONDS = 8
 RECEIPT_CHECK_TIMEOUT_SECONDS = 20
 
+# Получатель на QR и минимальная сумма — фиксированные факты о текущем
+# QR-коде магазина, не про конкретный заказ. Если QR сменится — поменять
+# здесь.
+PAYMENT_RECIPIENT_NAME = "Халикхан А."
+PAYMENT_MIN_AMOUNT_KGS = 1190
+
 RECEIPT_CHECK_PROMPT = (
-    "Ты проверяешь чек оплаты клиента Smilekit (фото или PDF). Сравни сумму "
-    "платежа на чеке с ожидаемой суммой заказа, указанной в сообщении. "
-    "Менеджер мог согласовать с клиентом индивидуальную скидку чуть ниже "
-    "ожидаемой суммы — это нормально: считай amount_matches=true, если сумма "
-    "на чеке точно равна ожидаемой либо меньше её не более чем на 300 (в той "
-    "же валюте). Сумму намного меньше ожидаемой (похоже на оплату одной "
-    "штуки, а не всего заказа) или больше ожидаемой считай несовпадением. "
-    "Если файл вообще не похож на банковский чек или квитанцию об оплате — "
-    "looks_like_receipt=false."
+    "Ты проверяешь чек оплаты клиента Smilekit (фото или PDF) по четырём "
+    "критериям — оцени каждый отдельно и честно, не угадывай, если не видно:\n"
+    "1. is_real_receipt_screenshot — это реальный скриншот банковского "
+    "перевода или квитанции об оплате (интерфейс банка/приложения), а не "
+    "текстовое сообщение, заметка или случайная картинка.\n"
+    f"2. amount_ok — сумма перевода на чеке не меньше {PAYMENT_MIN_AMOUNT_KGS} "
+    "(в сомах, либо эквивалент в другой валюте, если валюта не сом).\n"
+    f"3. recipient_ok — получатель на чеке — «{PAYMENT_RECIPIENT_NAME}» "
+    "(совпадение фамилии и инициала; другое имя получателя — это несовпадение).\n"
+    "4. date_ok — дата и время перевода на чеке совпадают с сегодняшней датой, "
+    "которая будет указана в сообщении ниже (старый или будущий чек — несовпадение)."
 )
 
 RECEIPT_TOOL = {
     "type": "function",
     "name": "submit_receipt_check",
-    "description": "Сообщить результат проверки чека оплаты.",
+    "description": "Сообщить результат проверки чека оплаты по всем критериям.",
     "parameters": {
         "type": "object",
         "properties": {
-            "looks_like_receipt": {
+            "is_real_receipt_screenshot": {
                 "type": "boolean",
-                "description": "На фото похоже на банковский чек/квитанцию об оплате, а не случайная картинка.",
+                "description": "Это реальный скриншот банковского перевода/квитанции, а не текст или случайная картинка.",
             },
-            "amount_matches": {
+            "amount_ok": {
                 "type": "boolean",
-                "description": "Сумма платежа на чеке совпадает с ожидаемой суммой заказа.",
+                "description": f"Сумма на чеке не меньше {PAYMENT_MIN_AMOUNT_KGS}.",
+            },
+            "recipient_ok": {
+                "type": "boolean",
+                "description": f"Получатель на чеке — «{PAYMENT_RECIPIENT_NAME}».",
+            },
+            "date_ok": {
+                "type": "boolean",
+                "description": "Дата и время перевода — сегодняшние.",
             },
         },
-        "required": ["looks_like_receipt", "amount_matches"],
+        "required": ["is_real_receipt_screenshot", "amount_ok", "recipient_ok", "date_ok"],
         "additionalProperties": False,
     },
 }
@@ -240,32 +256,31 @@ class SmilekitAssistant:
                 return None
         return None
 
-    async def verify_receipt(
-        self,
-        file_data_url: str,
-        expected_amount: float,
-        currency: str,
-        *,
-        kind: str = "image",
-    ) -> dict:
-        """Проверяет чек (фото или PDF): похоже ли на квитанцию и совпадает
-        ли сумма.
+    _RECEIPT_FAILURE = {
+        "is_real_receipt_screenshot": False,
+        "amount_ok": False,
+        "recipient_ok": False,
+        "date_ok": False,
+    }
+
+    async def verify_receipt(self, file_data_url: str, today: str, *, kind: str = "image") -> dict:
+        """Проверяет чек (фото или PDF) по всем критериям сразу: формат,
+        сумма, получатель, дата. today — сегодняшняя дата в Бишкеке,
+        'YYYY-MM-DD' (модель не знает реальную дату сама).
 
         При любом сбое считает чек непроверенным — бот попросит прислать
         чек ещё раз, а не пропускает оплату молча.
         """
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(self._verify_receipt, file_data_url, expected_amount, currency, kind),
+                asyncio.to_thread(self._verify_receipt, file_data_url, today, kind),
                 timeout=RECEIPT_CHECK_TIMEOUT_SECONDS,
             )
         except Exception:
             LOGGER.exception("Receipt verification failed")
-            return {"looks_like_receipt": False, "amount_matches": False}
+            return dict(self._RECEIPT_FAILURE)
 
-    def _verify_receipt(
-        self, file_data_url: str, expected_amount: float, currency: str, kind: str
-    ) -> dict:
+    def _verify_receipt(self, file_data_url: str, today: str, kind: str) -> dict:
         file_content = (
             {"type": "input_image", "image_url": file_data_url, "detail": "high"}
             if kind == "image"
@@ -278,10 +293,7 @@ class SmilekitAssistant:
             input=[{
                 "role": "user",
                 "content": [
-                    {
-                        "type": "input_text",
-                        "text": f"Ожидаемая сумма заказа: {expected_amount} {currency}.",
-                    },
+                    {"type": "input_text", "text": f"Сегодняшняя дата: {today}."},
                     file_content,
                 ],
             }],
@@ -295,12 +307,14 @@ class SmilekitAssistant:
             try:
                 result = json.loads(item.arguments)
                 return {
-                    "looks_like_receipt": bool(result.get("looks_like_receipt")),
-                    "amount_matches": bool(result.get("amount_matches")),
+                    "is_real_receipt_screenshot": bool(result.get("is_real_receipt_screenshot")),
+                    "amount_ok": bool(result.get("amount_ok")),
+                    "recipient_ok": bool(result.get("recipient_ok")),
+                    "date_ok": bool(result.get("date_ok")),
                 }
             except (json.JSONDecodeError, AttributeError):
                 break
-        return {"looks_like_receipt": False, "amount_matches": False}
+        return dict(self._RECEIPT_FAILURE)
 
     async def transcribe(
         self, audio: bytes, filename: str, model: str = "gpt-transcribe"

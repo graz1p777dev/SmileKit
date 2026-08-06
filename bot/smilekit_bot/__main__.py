@@ -645,17 +645,17 @@ async def main() -> None:
         try:
             encoded = base64.b64encode(file_bytes).decode("ascii")
             mime = "application/pdf" if kind == "pdf" else "image/jpeg"
+            today = time.strftime("%Y-%m-%d", time.gmtime(time.time() + BISHKEK_UTC_OFFSET_SECONDS))
             result = await assistant.verify_receipt(
                 f"data:{mime};base64,{encoded}",
-                expected_amount=pending["amount"],
-                currency=pending["currency"] or "KGS",
+                today,
                 kind=kind,
             )
         except Exception:
             logging.exception("Receipt verification crashed chat=%s", chat_id)
-            result = {"looks_like_receipt": False, "amount_matches": False}
+            result = {}
 
-        if result.get("looks_like_receipt") and result.get("amount_matches"):
+        if all(result.get(key) for key in ("is_real_receipt_screenshot", "amount_ok", "recipient_ok", "date_ok")):
             storage.clear_pending_payment(chat_id)
             storage.cancel_nudge_follow_ups(chat_id)
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
