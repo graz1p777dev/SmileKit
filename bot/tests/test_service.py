@@ -391,6 +391,22 @@ def test_promised_delay_hours_detects_relative_time():
     assert promised_delay_hours("хорошо, спасибо") is None
 
 
+def test_promised_clock_time_hours_detects_exact_time():
+    from smilekit_bot.sales import promised_clock_time_hours
+
+    # 10:00 Бишкек = 04:00 UTC, эпоха 0 = 1970-01-01 00:00 UTC.
+    now = 4 * 3600
+    # "к 18:00" сегодня — через 8 часов.
+    assert promised_clock_time_hours("напишу к 18:00", now) == 8.0
+    # "к 6 вечера" — то же самое время, но словами.
+    assert promised_clock_time_hours("отвечу к 6 вечера", now) == 8.0
+    # Время уже прошло сегодня — переносится на завтра.
+    assert promised_clock_time_hours("напишу к 8 утра", now) == 22.0
+    # Без минут и без уточнения слишком двусмысленно — не распознаём.
+    assert promised_clock_time_hours("вернусь в 5", now) is None
+    assert promised_clock_time_hours("хорошо, спасибо", now) is None
+
+
 def test_fill_nudge_template_substitutes_and_falls_back():
     from smilekit_bot import templates
 

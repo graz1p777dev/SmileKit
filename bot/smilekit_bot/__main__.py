@@ -28,6 +28,7 @@ from .outgoing import split_outgoing_messages
 from .sales import (
     classify_objection,
     is_complaint,
+    promised_clock_time_hours,
     promised_delay_hours,
     wants_payment_info,
     wants_to_order,
@@ -387,9 +388,14 @@ async def main() -> None:
         if kind == "text":
             push_stage(message, text)
 
-        # Клиент сам назвал момент, когда вернётся («завтра зп — закажу») —
-        # напоминание ставим точно на этот момент, а не обычную цепочку.
-        promised_hours = promised_delay_hours(text) if kind == "text" else None
+        # Клиент сам назвал момент, когда вернётся («завтра зп — закажу»,
+        # «напишу к 18:00») — напоминание ставим точно на этот момент, а не
+        # обычную цепочку. Точное время (если названо) приоритетнее дня.
+        promised_hours = None
+        if kind == "text":
+            promised_hours = promised_clock_time_hours(text, time.time())
+            if promised_hours is None:
+                promised_hours = promised_delay_hours(text)
 
         # Явное недовольство — не додумываем причину и не извиняемся вслепую:
         # прямо спрашиваем, что случилось, и сразу шлём важное уведомление в

@@ -73,6 +73,47 @@ def promised_delay_hours(text: str) -> float | None:
     return None
 
 
+# Бишкек = UTC+6 — своя копия константы, чтобы sales.py не тянул зависимость
+# от __main__.py ради одного числа.
+_BISHKEK_UTC_OFFSET_SECONDS = 6 * 3600
+_CLOCK_TIME = re.compile(
+    r"(?:^|\s)(?:к|в|до)\s+(\d{1,2})(?:[:\.](\d{2}))?\s*"
+    r"(вечера|утра|дня|ночи|часам?|часов)?",
+    re.IGNORECASE,
+)
+
+
+def promised_clock_time_hours(text: str, now: float) -> float | None:
+    """Клиент назвал конкретное время («напишу к 18:00») — часы до этого
+    момента по Бишкеку, с переносом на завтра, если время уже прошло.
+
+    Без минут и без слова-уточнения (вечера/утра/...) число слишком
+    двусмысленно («в 2 раза», «в 5 моделях») — такие совпадения игнорируются.
+    """
+    match = _CLOCK_TIME.search(text)
+    if not match:
+        return None
+    hour_str, minute_str, qualifier = match.groups()
+    if minute_str is None and not qualifier:
+        return None
+    hour = int(hour_str)
+    minute = int(minute_str) if minute_str is not None else 0
+    if hour > 23 or minute > 59:
+        return None
+    qualifier = (qualifier or "").lower()
+    if qualifier in ("вечера", "ночи") and hour < 12:
+        hour += 12
+    if hour > 23:
+        return None
+    shifted_now = now + _BISHKEK_UTC_OFFSET_SECONDS
+    day_start = shifted_now - (shifted_now % 86400)
+    target = day_start + hour * 3600 + minute * 60
+    if target <= shifted_now:
+        target += 86400
+    target_utc = target - _BISHKEK_UTC_OFFSET_SECONDS
+    return (target_utc - now) / 3600
+
+
 _PAYMENT_INFO_REQUEST = re.compile(
     r"реквизит|куда\s+(?:скинуть|перевести|переводить|оплатить|платить)|"
     r"номер\s+(?:карты|счёта|счета)|как\s+оплатить|способ\s+оплаты",
