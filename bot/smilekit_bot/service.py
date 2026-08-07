@@ -95,6 +95,11 @@ ROUTE_TOOL = {
                     "single_piece_purchase",
                     "discount_offer",
                     "usage_instructions",
+                    "braces_compatibility",
+                    "result_doubt",
+                    "no_result_refund",
+                    "offline_store_question",
+                    "delivery_address_question",
                 ],
                 "description": (
                     "effect_duration — клиент спрашивает, на сколько хватает эффекта, "
@@ -108,7 +113,18 @@ ROUTE_TOOL = {
                     "discount_offer — клиент прямо просит скидку или говорит, что ему "
                     "не хватает денег на полную цену. "
                     "usage_instructions — клиент спрашивает, как пользоваться, как "
-                    "наносить полоски или как применять продукт."
+                    "наносить полоски или как применять продукт. "
+                    "braces_compatibility — клиент спрашивает, можно ли пользоваться "
+                    "полосками при брекетах. "
+                    "result_doubt — клиент сомневается, сработает ли продукт лично для "
+                    "него, не верит в результат или просит доказательства (не про срок "
+                    "и не про безопасность). "
+                    "no_result_refund — клиент прямо спрашивает, что будет, если "
+                    "результата не будет / эффект не появится. "
+                    "offline_store_question — клиент спрашивает, есть ли офлайн-магазин "
+                    "или шоурум, где можно посмотреть товар лично. "
+                    "delivery_address_question — клиент просит адрес магазина, чтобы "
+                    "самому забрать или посмотреть товар (не адрес доставки к себе)."
                 ),
             }
         },
@@ -123,8 +139,10 @@ ROUTE_JSON_HINT = (
     "Если сообщение подходит под готовый сценарий, верни JSON "
     '{"template_id": "<id>"} с одним из id: effect_duration, '
     "first_use_effect, safety_composition, single_piece_purchase, "
-    "discount_offer, usage_instructions. Если не уверен или сомневаешься — "
-    'верни {"template_id": null}. Всегда отвечай только этим JSON, без markdown.'
+    "discount_offer, usage_instructions, braces_compatibility, result_doubt, "
+    "no_result_refund, offline_store_question, delivery_address_question. "
+    'Если не уверен или сомневаешься — верни {"template_id": null}. '
+    "Всегда отвечай только этим JSON, без markdown."
 )
 
 _SUPERVISOR_JSON_HINT = """
@@ -304,7 +322,12 @@ class SmilekitAssistant:
         if review.status == "approved":
             text = draft
         elif review.status == "rewrite":
-            text = review.corrected_response.strip() or FALLBACK_TEXT
+            # Супервизор иногда требует rewrite, но не заполняет
+            # corrected_response (пустое поле в structured output) — черновик
+            # менеджера обычно нормальный ответ по теме, тогда как FALLBACK_TEXT
+            # выглядит как будто бот вообще не понял клиента. Черновик —
+            # менее рискованный дефолт, чем готовое признание непонимания.
+            text = review.corrected_response.strip() or draft or FALLBACK_TEXT
         text = restore_mapping(text, pii_mapping)
         review = _restore_supervisor_pii(review, pii_mapping)
         return AssistantReply(text=text, supervisor=review)

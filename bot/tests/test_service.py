@@ -71,6 +71,18 @@ async def test_approved_uses_draft(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_rewrite_with_empty_corrected_response_falls_back_to_draft(tmp_path):
+    """Супервизор требует rewrite, но не заполнил corrected_response (пустое
+    поле structured output) — клиент должен получить черновик менеджера, а
+    не готовое "не понял вас", даже если сообщение было понятным."""
+    review = SupervisorResult(status="rewrite", risk_level="low", corrected_response="")
+    responses = FakeResponses(review, draft="Да, можно оформить — подскажите город.")
+    result = await assistant(tmp_path, responses).reply("можно оформить", [])
+    assert result.text == "Да, можно оформить — подскажите город."
+    assert result.text != FALLBACK_TEXT
+
+
+@pytest.mark.asyncio
 async def test_price_question_is_written_by_ai(tmp_path):
     review = SupervisorResult(status="approved", risk_level="low")
     responses = FakeResponses(review, draft="1490 сом. В коробке 14 полосок.")
@@ -366,6 +378,11 @@ def test_regular_question_does_not_add_manager_contact():
     assert ensure_manager_contact("Какая цена?", "1490 сом") == "1490 сом"
 
 
+def test_short_order_confirmation_detected():
+    assert wants_to_order("можно оформить")
+    assert wants_to_order("оформляйте")
+
+
 def test_existing_manager_contact_is_not_duplicated():
     response = "Напишите менеджеру: +996 999 000 845"
     assert ensure_manager_contact("Хочу купить", response) == response
@@ -407,11 +424,39 @@ def test_promised_clock_time_hours_detects_exact_time():
     assert promised_clock_time_hours("хорошо, спасибо", now) is None
 
 
+def test_promised_calendar_date_hours_detects_day_of_month():
+    from smilekit_bot.sales import promised_calendar_date_hours
+
+    # 10:00 Бишкек, 1970-01-01 (см. комментарий в тесте clock_time выше).
+    now = 4 * 3600
+    # "После 5-го" — день ещё не прошёл в этом месяце, время по умолчанию 12:00.
+    assert promised_calendar_date_hours("я после 5-го закажу", now) == 98.0
+    # "Вечером 5-го" — то же число, но ближе к вечеру (18:00).
+    assert promised_calendar_date_hours("я вечером 5-го закажу", now) == 104.0
+    # Названный месяц переопределяет текущий.
+    assert promised_calendar_date_hours("я в сентябре 5-го закажу", now) is not None
+    assert promised_calendar_date_hours("хорошо, спасибо", now) is None
+
+    # 1970-01-31 10:00 Бишкек — 5-е число в этом месяце уже прошло, переносим
+    # на 5 февраля.
+    now_end_of_month = 30 * 86400 + 10 * 3600 - 6 * 3600
+    assert promised_calendar_date_hours("после 5-го отпишусь", now_end_of_month) == 122.0
+
+
+def test_mentions_vague_future_promise_requires_clarification():
+    from smilekit_bot.sales import mentions_vague_future_promise
+
+    assert mentions_vague_future_promise("закажу через пару дней")
+    assert mentions_vague_future_promise("напишу после зарплаты")
+    assert not mentions_vague_future_promise("послезавтра отвечу")
+    assert not mentions_vague_future_promise("хорошо, спасибо")
+
+
 def test_fill_nudge_template_substitutes_and_falls_back():
     from smilekit_bot import templates
 
-    text = templates.fill_nudge_template(templates.FEW_HOURS_FOLLOWUP, "Айгерим")
-    assert text.startswith("Здравствуйте, Айгерим.")
+    text = templates.fill_nudge_template(templates.LAST_MESSAGE_FOLLOWUP, "Айгерим")
+    assert text.startswith("Айгерим, больше не буду отвлекать.")
     assert "Smilekit" in text
 
     without_name = templates.fill_nudge_template(templates.LAST_MESSAGE_FOLLOWUP, None)

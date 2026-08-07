@@ -28,6 +28,8 @@ from .outgoing import split_outgoing_messages
 from .sales import (
     classify_objection,
     is_complaint,
+    mentions_vague_future_promise,
+    promised_calendar_date_hours,
     promised_clock_time_hours,
     promised_delay_hours,
     wants_payment_info,
@@ -54,6 +56,11 @@ ROUTED_TEMPLATES = {
     "single_piece_purchase": templates.SINGLE_PIECE_POLICY,
     "discount_offer": templates.DISCOUNT_OFFER,
     "usage_instructions": templates.USAGE_INSTRUCTIONS,
+    "braces_compatibility": templates.BRACES_REPLY,
+    "result_doubt": templates.DOUBT_RESULT_REPLY,
+    "no_result_refund": templates.NO_RESULT_REFUND_REPLY,
+    "offline_store_question": templates.OFFLINE_STORE_COD_REPLY,
+    "delivery_address_question": templates.ADDRESS_COD_REPLY,
 }
 # Клиент часто пишет мыслями через несколько сообщений подряд (видно на
 # живых чатах). Без этого окна каждое такое сообщение уходило в отдельный
@@ -84,6 +91,22 @@ AWAITING_PAYMENT_MAX_REMINDERS = 3
 QUIET_HOURS_START_BISHKEK = 22
 QUIET_HOURS_END_BISHKEK = 9
 BISHKEK_UTC_OFFSET_SECONDS = 6 * 3600
+# Первый дожим простоя: написал до 19:00 — дожим в 19:30 в тот же день;
+# написал после 19:00 — в 12:00 на следующий день.
+FOLLOWUP_CUTOFF_HOUR_BISHKEK = 19
+FOLLOWUP_SAME_DAY_SEND_HOUR_BISHKEK = 19.5
+FOLLOWUP_NEXT_DAY_SEND_HOUR_BISHKEK = 12
+
+
+def next_idle_followup_due_at(now: float) -> float:
+    shifted = now + BISHKEK_UTC_OFFSET_SECONDS
+    day_start = shifted - (shifted % 86400)
+    hour = (shifted - day_start) / 3600
+    if hour < FOLLOWUP_CUTOFF_HOUR_BISHKEK:
+        target = day_start + FOLLOWUP_SAME_DAY_SEND_HOUR_BISHKEK * 3600
+    else:
+        target = day_start + 86400 + FOLLOWUP_NEXT_DAY_SEND_HOUR_BISHKEK * 3600
+    return target - BISHKEK_UTC_OFFSET_SECONDS
 
 
 def next_allowed_send_time(now: float) -> float | None:
@@ -205,8 +228,8 @@ async def main() -> None:
                         template = templates.AFTER_CONSULT_FOLLOWUP
                     else:
                         template = {
-                            "hours": templates.FEW_HOURS_FOLLOWUP,
-                            "day": templates.NEXT_DAY_FOLLOWUP,
+                            "hours": templates.IDLE_FOLLOWUP,
+                            "day": templates.DISCOUNT_FOLLOWUP,
                             "last": templates.LAST_MESSAGE_FOLLOWUP,
                             "order_incomplete": templates.ORDER_INCOMPLETE_FOLLOWUP,
                             "promised": templates.PROMISED_FOLLOWUP,
@@ -367,7 +390,8 @@ async def main() -> None:
         elif promised_hours is not None:
             storage.schedule_promised_follow_up(chat_id, time.time() + promised_hours * 3600)
         else:
-            storage.schedule_nudge_chain(chat_id, time.time())
+            now = time.time()
+            storage.schedule_nudge_chain(chat_id, now, next_idle_followup_due_at(now))
 
     async def process(
         message: Message,
@@ -399,6 +423,23 @@ async def main() -> None:
             promised_hours = promised_clock_time_hours(text, time.time())
             if promised_hours is None:
                 promised_hours = promised_delay_hours(text)
+            if promised_hours is None:
+                promised_hours = promised_calendar_date_hours(text, time.time())
+
+        # Клиент откладывает заказ без определимой даты («через пару дней»,
+        # «после зарплаты») — вместо того чтобы гадать интервал, уточняем
+        # число и не дожимаем раньше срока, который клиент сам не назвал.
+        if (
+            kind == "text"
+            and not is_new_conversation
+            and promised_hours is None
+            and mentions_vague_future_promise(text)
+        ):
+            await message.answer(templates.CLARIFY_VAGUE_DATE_REPLY)
+            storage.add_exchange(chat_id, message.message_id, text, templates.CLARIFY_VAGUE_DATE_REPLY, kind)
+            logging.info("Vague future promise, asked to clarify chat=%s message=%s", chat_id, message.message_id)
+            schedule_idle_follow_up(chat_id, None)
+            return
 
         # Явное недовольство — не додумываем причину и не извиняемся вслепую:
         # прямо спрашиваем, что случилось, и сразу шлём важное уведомление в
@@ -548,7 +589,7 @@ async def main() -> None:
             await message.answer(templates.FIRST_USE_EFFECT)
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.7, 1.1))
-            await message.answer("Вам оформить заказ?")
+            await message.answer("Вам оформить доставку?")
             storage.add_exchange(
                 chat_id, message.message_id, text,
                 "[результаты + эффект + доставка + вопрос про оформление]", kind,

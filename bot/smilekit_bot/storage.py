@@ -336,8 +336,9 @@ class BotStorage:
             self._db.execute("DELETE FROM daily_nudges WHERE chat_id = ?", (chat_id,))
             self._db.commit()
 
-    def schedule_nudge_chain(self, chat_id: int, now: float) -> None:
-        """Простой без ответа: через несколько часов → на след. день/после
+    def schedule_nudge_chain(self, chat_id: int, now: float, first_due_at: float | None = None) -> None:
+        """Простой без ответа: сначала дожим (по умолчанию — через несколько
+        часов, либо в момент first_due_at, если передан) → на след. день/после
         консультации → финальное сообщение. Отменяет любые прежние
         напоминания — они бы дублировали друг друга."""
         self.cancel_nudge_follow_ups(chat_id)
@@ -345,7 +346,7 @@ class BotStorage:
             self._db.executemany(
                 "INSERT INTO nudge_follow_ups (chat_id, kind, due_at) VALUES (?, ?, ?)",
                 [
-                    (chat_id, "hours", now + 3 * 3600),
+                    (chat_id, "hours", first_due_at if first_due_at is not None else now + 3 * 3600),
                     (chat_id, "day", now + 27 * 3600),
                     (chat_id, "last", now + 75 * 3600),
                 ],

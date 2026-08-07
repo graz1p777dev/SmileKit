@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timezone
 
 
 MANAGER_CONTACT = "0999000845"
@@ -10,7 +11,8 @@ _ORDER_INTENT = re.compile(
     r"\b("
     r"хочу\s+(?:заказать|купить|взять)|"
     r"(?:как|где)\s+(?:заказать|купить|оформить)|"
-    r"(?:закажу|заказать|оформить\s+заказ|беру|возьму)|"
+    r"(?:закажу|заказать|оформить(?:\s+заказ)?|оформляйте|оформляем|беру|возьму)|"
+    r"можно\s+оформить|"
     r"заказ\s+(?:берейин|кылайын)|сатып\s+ал|алайын|"
     r"buyurtma|sotib\s+ol"
     r")\b",
@@ -112,6 +114,77 @@ def promised_clock_time_hours(text: str, now: float) -> float | None:
         target += 86400
     target_utc = target - _BISHKEK_UTC_OFFSET_SECONDS
     return (target_utc - now) / 3600
+
+
+_MONTH_STEMS = {
+    "январ": 1, "феврал": 2, "март": 3, "апрел": 4, "ма": 5, "июн": 6,
+    "июл": 7, "август": 8, "сентябр": 9, "октябр": 10, "ноябр": 11, "декабр": 12,
+}
+_DAY_OF_MONTH = re.compile(r"\b([1-9]|[12]\d|3[01])[-\s]?(?:го|ого)\b", re.IGNORECASE)
+_EVENING_QUALIFIER = re.compile(r"вечер", re.IGNORECASE)
+
+
+def _month_from_text(text: str) -> int | None:
+    lowered = text.lower()
+    for stem, number in _MONTH_STEMS.items():
+        if stem in lowered:
+            return number
+    return None
+
+
+def promised_calendar_date_hours(text: str, now: float) -> float | None:
+    """Клиент назвал конкретное число месяца («после 5-го», «5 сентября»,
+    «в сентябре 5-го») — часы до этого момента по Бишкеку.
+
+    Время по умолчанию — 12:00, «вечером» — 18:00. Если месяц не назван и
+    дата в текущем месяце уже прошла — переносим на следующий месяц; если
+    месяц назван явно и дата в этом году уже прошла — на следующий год.
+    """
+    match = _DAY_OF_MONTH.search(text)
+    if not match:
+        return None
+    day = int(match.group(1))
+    month = _month_from_text(text)
+    hour = 18 if _EVENING_QUALIFIER.search(text) else 12
+
+    shifted_now = now + _BISHKEK_UTC_OFFSET_SECONDS
+    now_dt = datetime.fromtimestamp(shifted_now, tz=timezone.utc)
+    target_month = month or now_dt.month
+    try:
+        target = now_dt.replace(
+            month=target_month, day=day, hour=hour, minute=0, second=0, microsecond=0
+        )
+    except ValueError:
+        return None
+    if target <= now_dt:
+        if month is None:
+            next_month = target_month + 1
+            next_year = now_dt.year
+            if next_month > 12:
+                next_month = 1
+                next_year += 1
+            try:
+                target = target.replace(year=next_year, month=next_month)
+            except ValueError:
+                return None
+        else:
+            target = target.replace(year=now_dt.year + 1)
+    target_utc = target.timestamp() - _BISHKEK_UTC_OFFSET_SECONDS
+    return (target_utc - now) / 3600
+
+
+_VAGUE_FUTURE_PROMISE = re.compile(
+    r"через\s+(?:пару|несколько)\s+дн|после\s+зарплаты|"
+    r"на\s+днях|как-нибудь\s+позже|чуть\s+позже\s+закажу",
+    re.IGNORECASE,
+)
+
+
+def mentions_vague_future_promise(text: str) -> bool:
+    """Клиент откладывает заказ без определимой даты («через пару дней»,
+    «после зарплаты») — вместо того чтобы гадать интервал, бот должен
+    уточнить конкретное число."""
+    return bool(_VAGUE_FUTURE_PROMISE.search(text))
 
 
 _PAYMENT_INFO_REQUEST = re.compile(
