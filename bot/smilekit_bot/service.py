@@ -534,6 +534,10 @@ class SmilekitAssistant:
             messages=messages,
             temperature=0.35,
             max_tokens=900,
+            # См. комментарий в _route_deepseek — V4 thinking включён по
+            # умолчанию и на живом трафике уже несколько раз съедал весь
+            # max_tokens до финального content (клиент получал заглушку).
+            extra_body={"thinking": {"type": "disabled"}},
         )
         text = (response.choices[0].message.content or "").strip()
         if not text:
