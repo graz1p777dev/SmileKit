@@ -28,6 +28,10 @@ from .sales import MANAGER_CONTACT
 
 LOGGER = logging.getLogger(__name__)
 
+# Жалобы/возврат/опт-сотрудничество — не обычная воронка продажи, деал
+# переносится в отдельный этап на ручной разбор менеджером.
+NON_STANDARD_REQUEST_STAGE = "non_standard_request"
+
 ORDER_PATH = "/api/internal/orders"
 DEALS_PATH = "/api/internal/deals"
 NOTIFY_PATH = "/api/internal/notify"

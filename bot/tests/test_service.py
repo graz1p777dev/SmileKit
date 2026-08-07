@@ -443,6 +443,14 @@ def test_promised_calendar_date_hours_detects_day_of_month():
     assert promised_calendar_date_hours("после 5-го отпишусь", now_end_of_month) == 122.0
 
 
+def test_mentions_cooperation_inquiry_detects_wholesale_and_partnership():
+    from smilekit_bot.sales import mentions_cooperation_inquiry
+
+    assert mentions_cooperation_inquiry("Хочу закупить оптом, вы работаете с дистрибьюторами?")
+    assert mentions_cooperation_inquiry("Интересует сотрудничество, я блогер")
+    assert not mentions_cooperation_inquiry("Сколько стоит одна коробка?")
+
+
 def test_mentions_vague_future_promise_requires_clarification():
     from smilekit_bot.sales import mentions_vague_future_promise
 

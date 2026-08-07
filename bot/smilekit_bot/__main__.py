@@ -16,6 +16,7 @@ from aiohttp import web
 from .api import create_app, effective_settings
 from .config import Settings
 from .crm import (
+    NON_STANDARD_REQUEST_STAGE,
     REQUEST_TIMEOUT,
     CrmClient,
     build_deal_payload,
@@ -28,6 +29,7 @@ from .outgoing import split_outgoing_messages
 from .sales import (
     classify_objection,
     is_complaint,
+    mentions_cooperation_inquiry,
     mentions_vague_future_promise,
     promised_calendar_date_hours,
     promised_clock_time_hours,
@@ -453,8 +455,8 @@ async def main() -> None:
             return
 
         # Явное недовольство — не додумываем причину и не извиняемся вслепую:
-        # прямо спрашиваем, что случилось, и сразу шлём важное уведомление в
-        # CRM, чтобы разобрался человек, а не бот.
+        # прямо спрашиваем, что случилось, шлём важное уведомление в CRM и
+        # переносим сделку в «Нестандартный запрос» — разбирает человек.
         if kind == "text" and not is_new_conversation and is_complaint(text):
             await message.answer(templates.COMPLAINT_PROMPT)
             storage.add_exchange(chat_id, message.message_id, text, templates.COMPLAINT_PROMPT, kind)
@@ -465,7 +467,30 @@ async def main() -> None:
             ))
             crm_tasks.add(task)
             task.add_done_callback(crm_tasks.discard)
+            stage_task = asyncio.create_task(crm.advance_stage(chat_id, NON_STANDARD_REQUEST_STAGE))
+            crm_tasks.add(stage_task)
+            stage_task.add_done_callback(crm_tasks.discard)
             logging.info("Complaint detected chat=%s message=%s", chat_id, message.message_id)
+            schedule_idle_follow_up(chat_id, promised_hours)
+            return
+
+        # Опт/сотрудничество/реклама — не розничный сценарий, не продаём по
+        # обычному скрипту. Отвечаем коротко и переносим сделку в этап
+        # «Нестандартный запрос» на ручной разбор.
+        if kind == "text" and not is_new_conversation and mentions_cooperation_inquiry(text):
+            await message.answer(templates.COOPERATION_INQUIRY_REPLY)
+            storage.add_exchange(chat_id, message.message_id, text, templates.COOPERATION_INQUIRY_REPLY, kind)
+            task = asyncio.create_task(crm.notify_important(
+                title="Запрос о сотрудничестве (Smilekit)",
+                body=f"Сообщение клиента: {text}",
+                chat_id=chat_id,
+            ))
+            crm_tasks.add(task)
+            task.add_done_callback(crm_tasks.discard)
+            stage_task = asyncio.create_task(crm.advance_stage(chat_id, NON_STANDARD_REQUEST_STAGE))
+            crm_tasks.add(stage_task)
+            stage_task.add_done_callback(crm_tasks.discard)
+            logging.info("Cooperation inquiry detected chat=%s message=%s", chat_id, message.message_id)
             schedule_idle_follow_up(chat_id, promised_hours)
             return
 
