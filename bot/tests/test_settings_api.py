@@ -48,8 +48,17 @@ def make_assistant(tmp_path) -> SmilekitAssistant:
     return SmilekitAssistant(api_key="test", knowledge_path=knowledge, client=FakeClient())
 
 
+class FakeBot:
+    def __init__(self):
+        self.sent: list[tuple[int, str]] = []
+
+    async def send_message(self, chat_id, text):
+        self.sent.append((chat_id, text))
+        return SimpleNamespace(message_id=len(self.sent) * 1000)
+
+
 @asynccontextmanager
-async def running_client(tmp_path, **setting_overrides):
+async def running_client(tmp_path, bot=None, **setting_overrides):
     """Поднимает api.create_app на тестовом сервере в текущем event loop.
 
     Не используем aiohttp.pytest_plugin/aiohttp_client: он заводит свой
@@ -61,7 +70,7 @@ async def running_client(tmp_path, **setting_overrides):
     settings = make_settings(**setting_overrides)
     storage = make_storage(tmp_path)
     assistant = make_assistant(tmp_path)
-    app = create_app(settings, storage, assistant)
+    app = create_app(settings, storage, assistant, bot)
     server = TestServer(app)
     client = TestClient(server)
     await client.start_server()
@@ -255,3 +264,69 @@ async def test_lab_accepts_history(tmp_path):
             },
         )
         assert resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_chat_status_defaults_to_not_paused(tmp_path):
+    async with running_client(tmp_path) as (client, storage, settings):
+        resp = await client.get("/internal/chats/42/status", headers={"x-internal-token": TOKEN})
+        assert resp.status == 200
+        assert (await resp.json()) == {"paused": False}
+
+
+@pytest.mark.asyncio
+async def test_chat_pause_and_resume(tmp_path):
+    async with running_client(tmp_path) as (client, storage, settings):
+        resp = await client.post("/internal/chats/42/pause", headers={"x-internal-token": TOKEN})
+        assert resp.status == 200
+        assert (await resp.json()) == {"paused": True}
+        assert storage.is_paused(42)
+
+        resp = await client.get("/internal/chats/42/status", headers={"x-internal-token": TOKEN})
+        assert (await resp.json()) == {"paused": True}
+
+        resp = await client.post("/internal/chats/42/resume", headers={"x-internal-token": TOKEN})
+        assert resp.status == 200
+        assert (await resp.json()) == {"paused": False}
+        assert not storage.is_paused(42)
+
+
+@pytest.mark.asyncio
+async def test_chat_message_sends_and_pauses(tmp_path):
+    bot = FakeBot()
+    async with running_client(tmp_path, bot=bot) as (client, storage, settings):
+        resp = await client.post(
+            "/internal/chats/42/message",
+            headers={"x-internal-token": TOKEN},
+            json={"text": "Здравствуйте, это Айгерим, помогу с заказом"},
+        )
+        assert resp.status == 200
+        assert (await resp.json()) == {"paused": True}
+        assert bot.sent == [(42, "Здравствуйте, это Айгерим, помогу с заказом")]
+        assert storage.is_paused(42)
+        history = storage.history(42)
+        assert history[-1].role == "assistant"
+        assert history[-1].content == "Здравствуйте, это Айгерим, помогу с заказом"
+
+
+@pytest.mark.asyncio
+async def test_chat_message_without_bot_returns_503(tmp_path):
+    async with running_client(tmp_path) as (client, storage, settings):
+        resp = await client.post(
+            "/internal/chats/42/message",
+            headers={"x-internal-token": TOKEN},
+            json={"text": "Привет"},
+        )
+        assert resp.status == 503
+
+
+@pytest.mark.asyncio
+async def test_chat_message_requires_text(tmp_path):
+    bot = FakeBot()
+    async with running_client(tmp_path, bot=bot) as (client, storage, settings):
+        resp = await client.post(
+            "/internal/chats/42/message",
+            headers={"x-internal-token": TOKEN},
+            json={},
+        )
+        assert resp.status == 400

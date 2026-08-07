@@ -90,6 +90,11 @@ class BotStorage:
                     reminder_count INTEGER NOT NULL DEFAULT 0,
                     created_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS paused_chats (
+                    chat_id INTEGER PRIMARY KEY,
+                    paused_at REAL NOT NULL,
+                    paused_by TEXT
+                );
                 """
             )
             self._db.commit()
@@ -123,6 +128,33 @@ class BotStorage:
                     """
                 )
                 self._db.commit()
+
+    def is_paused(self, chat_id: int) -> bool:
+        """Оператор пишет клиенту вручную из CRM — бот в этот чат не отвечает,
+        пока не включат обратно."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT 1 FROM paused_chats WHERE chat_id = ?", (chat_id,)
+            ).fetchone()
+        return row is not None
+
+    def pause_chat(self, chat_id: int, now: float, paused_by: str | None = None) -> None:
+        with self._lock:
+            self._db.execute(
+                """
+                INSERT INTO paused_chats(chat_id, paused_at, paused_by) VALUES (?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    paused_at = excluded.paused_at,
+                    paused_by = excluded.paused_by
+                """,
+                (chat_id, now, paused_by),
+            )
+            self._db.commit()
+
+    def resume_chat(self, chat_id: int) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM paused_chats WHERE chat_id = ?", (chat_id,))
+            self._db.commit()
 
     def get_bot_setting(self, key: str) -> str | None:
         """Сохранённый override настройки бота или None, если его нет.
@@ -250,6 +282,37 @@ class BotStorage:
                     (chat_id, message_id, "user", user_text, kind, now),
                     (chat_id, message_id, "assistant", assistant_text, "text", now),
                 ],
+            )
+            self._db.commit()
+
+    def add_incoming_message(self, chat_id: int, message_id: int, text: str, kind: str) -> None:
+        """Чат на паузе (оператор ведёт клиента вручную) — сохраняем входящее
+        сообщение клиента без ответа бота, чтобы оператор видел его в CRM."""
+        now = time.time()
+        with self._lock:
+            self._db.execute(
+                """
+                INSERT OR IGNORE INTO messages(
+                    chat_id, telegram_message_id, role, content, kind, created_at
+                ) VALUES (?, ?, 'user', ?, ?, ?)
+                """,
+                (chat_id, message_id, text, kind, now),
+            )
+            self._db.commit()
+
+    def add_operator_message(self, chat_id: int, message_id: int, text: str) -> None:
+        """Оператор написал клиенту вручную из CRM — сохраняем как ответ
+        ассистента (клиент видит то же самое сообщение от Smilekit), без
+        парного пользовательского сообщения на этом telegram_message_id."""
+        now = time.time()
+        with self._lock:
+            self._db.execute(
+                """
+                INSERT OR IGNORE INTO messages(
+                    chat_id, telegram_message_id, role, content, kind, created_at
+                ) VALUES (?, ?, 'assistant', ?, 'text', ?)
+                """,
+                (chat_id, message_id, text, now),
             )
             self._db.commit()
 

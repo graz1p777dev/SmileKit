@@ -10,6 +10,7 @@
 """
 
 import logging
+import time
 
 from aiohttp import web
 
@@ -25,10 +26,10 @@ MANAGER_PROMPT_KEY = "manager_prompt"
 SUPERVISOR_PROMPT_KEY = "supervisor_prompt"
 MODEL_KEY = "model"
 
-# Встроенный MANAGER_PROMPT сам по себе ~8550 символов — лимит должен быть
-# заведомо больше дефолта, иначе «сохранить без правок» тихо обрежет промпт
-# и живой бот получит урезанную инструкцию.
-MAX_PROMPT_LENGTH = 12000
+# Встроенный MANAGER_PROMPT растёт вместе с бизнес-правилами — лимит должен
+# быть заведомо больше дефолта, иначе «сохранить без правок» тихо обрежет
+# промпт и живой бот получит урезанную инструкцию.
+MAX_PROMPT_LENGTH = 13000
 
 
 def allowed_models(settings: Settings) -> list[str]:
@@ -150,6 +151,75 @@ async def put_settings_handler(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
+async def get_chat_status_handler(request: web.Request) -> web.Response:
+    denied = _require_auth(request)
+    if denied is not None:
+        return denied
+    storage: BotStorage = request.app["storage"]
+    try:
+        chat_id = int(request.match_info["chat_id"])
+    except ValueError:
+        return web.json_response({"error": "invalid chat_id"}, status=400)
+    return web.json_response({"paused": storage.is_paused(chat_id)})
+
+
+async def post_chat_pause_handler(request: web.Request) -> web.Response:
+    denied = _require_auth(request)
+    if denied is not None:
+        return denied
+    storage: BotStorage = request.app["storage"]
+    try:
+        chat_id = int(request.match_info["chat_id"])
+    except ValueError:
+        return web.json_response({"error": "invalid chat_id"}, status=400)
+    storage.cancel_nudge_follow_ups(chat_id)
+    storage.pause_chat(chat_id, time.time())
+    return web.json_response({"paused": True})
+
+
+async def post_chat_resume_handler(request: web.Request) -> web.Response:
+    denied = _require_auth(request)
+    if denied is not None:
+        return denied
+    storage: BotStorage = request.app["storage"]
+    try:
+        chat_id = int(request.match_info["chat_id"])
+    except ValueError:
+        return web.json_response({"error": "invalid chat_id"}, status=400)
+    storage.resume_chat(chat_id)
+    return web.json_response({"paused": False})
+
+
+async def post_chat_message_handler(request: web.Request) -> web.Response:
+    """Оператор пишет клиенту вручную из CRM. Отправляет сообщение через
+    того же Telegram-бота и автоматически ставит чат на паузу — дальше
+    клиента ведёт человек, пока не включат бота обратно (/resume)."""
+    denied = _require_auth(request)
+    if denied is not None:
+        return denied
+    bot = request.app.get("bot")
+    if bot is None:
+        return web.json_response({"error": "bot_unavailable"}, status=503)
+    storage: BotStorage = request.app["storage"]
+    try:
+        chat_id = int(request.match_info["chat_id"])
+    except ValueError:
+        return web.json_response({"error": "invalid chat_id"}, status=400)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid_json"}, status=400)
+    text = body.get("text") if isinstance(body, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        return web.json_response({"error": "text is required"}, status=400)
+
+    sent = await bot.send_message(chat_id, text)
+    storage.cancel_nudge_follow_ups(chat_id)
+    storage.pause_chat(chat_id, time.time(), paused_by="operator")
+    storage.add_operator_message(chat_id, sent.message_id, text)
+    return web.json_response({"paused": True})
+
+
 async def post_lab_handler(request: web.Request) -> web.Response:
     denied = _require_auth(request)
     if denied is not None:
@@ -202,13 +272,20 @@ async def error_middleware(request: web.Request, handler):
         return web.json_response({"error": "internal_error"}, status=500)
 
 
-def create_app(settings: Settings, storage: BotStorage, assistant: SmilekitAssistant) -> web.Application:
+def create_app(
+    settings: Settings, storage: BotStorage, assistant: SmilekitAssistant, bot=None
+) -> web.Application:
     app = web.Application(middlewares=[error_middleware])
     app["settings"] = settings
     app["storage"] = storage
     app["assistant"] = assistant
+    app["bot"] = bot
     app.router.add_get("/internal/health", health)
     app.router.add_get("/internal/settings", get_settings_handler)
     app.router.add_put("/internal/settings", put_settings_handler)
     app.router.add_post("/internal/lab", post_lab_handler)
+    app.router.add_get("/internal/chats/{chat_id}/status", get_chat_status_handler)
+    app.router.add_post("/internal/chats/{chat_id}/pause", post_chat_pause_handler)
+    app.router.add_post("/internal/chats/{chat_id}/resume", post_chat_resume_handler)
+    app.router.add_post("/internal/chats/{chat_id}/message", post_chat_message_handler)
     return app
