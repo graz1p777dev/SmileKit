@@ -375,6 +375,10 @@ class SmilekitAssistant:
             response_format={"type": "json_object"},
             temperature=0,
             max_tokens=100,
+            # V4 по умолчанию включает thinking — на JSON-ответах он иногда
+            # съедает весь max_tokens до финального content (см. deepseek.js
+            # в Мостовом), поэтому здесь его отключаем.
+            extra_body={"thinking": {"type": "disabled"}},
         )
         content = response.choices[0].message.content
         if not content:
@@ -584,6 +588,9 @@ class SmilekitAssistant:
             response_format={"type": "json_object"},
             temperature=0,
             max_tokens=900,
+            # См. комментарий в _route_deepseek — thinking съедает max_tokens
+            # до финального JSON.
+            extra_body={"thinking": {"type": "disabled"}},
         )
         content = response.choices[0].message.content
         if not content:
