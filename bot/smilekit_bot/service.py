@@ -117,6 +117,57 @@ ROUTE_TOOL = {
     },
 }
 
+# DeepSeek не поддерживает function calling так же, как OpenAI Responses API —
+# просим тот же выбор в виде JSON вместо вызова функции send_template.
+ROUTE_JSON_HINT = (
+    "Если сообщение подходит под готовый сценарий, верни JSON "
+    '{"template_id": "<id>"} с одним из id: effect_duration, '
+    "first_use_effect, safety_composition, single_piece_purchase, "
+    "discount_offer, usage_instructions. Если не уверен или сомневаешься — "
+    'верни {"template_id": null}. Всегда отвечай только этим JSON, без markdown.'
+)
+
+_SUPERVISOR_JSON_HINT = """
+Верни ТОЛЬКО валидный JSON (без markdown-обёртки) строго с этими полями:
+{
+  "status": "approved" | "rewrite",
+  "risk_level": "low" | "medium" | "high",
+  "issues": ["строка", ...],
+  "corrected_response": "строка, пусто если approved",
+  "handoff_reason": "",
+  "crm_action": {"stage": "строка", "tags": ["строка", ...], "note": "строка"},
+  "customer_memory": "строка",
+  "order_summary": "строка",
+  "order": {
+    "quantity": число или null,
+    "total_amount": число или null,
+    "currency": "строка" или null,
+    "city": "строка" или null,
+    "contact_phone": "строка" или null,
+    "contact_username": "строка" или null
+  }
+}
+""".strip()
+
+
+def _parse_json_loose(content: str) -> dict:
+    """DeepSeek иногда оборачивает JSON в ```json ... ``` — снимаем перед
+    парсингом; при мусоре вокруг вырезаем внешний объект по фигурным скобкам."""
+    text = content.strip()
+    fenced = text[:3] == "```"
+    if fenced:
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(text[start : end + 1])
+        raise
+
 
 def _restore_supervisor_pii(result: SupervisorResult, mapping: dict[str, str]) -> SupervisorResult:
     """Подставляет реальные телефон/адрес/имя обратно в поля супервизора
@@ -141,11 +192,24 @@ class SmilekitAssistant:
         model: str = "gpt-5.6-luna",
         knowledge_path: Path | None = None,
         client: OpenAI | None = None,
+        deepseek_api_key: str | None = None,
+        deepseek_model: str = "deepseek-v4-flash",
+        deepseek_base_url: str = "https://api.deepseek.com",
+        deepseek_client: OpenAI | None = None,
     ) -> None:
         self.model = model
         self.client = client or OpenAI(api_key=api_key)
         path = knowledge_path or Path(__file__).resolve().parent.parent / "knowledge_base.md"
         self.knowledge = path.read_text(encoding="utf-8")
+        # Черновик/ревью/роутер — чистый текст, уходят в DeepSeek (дешевле,
+        # DeepSeek OpenAI-совместим на /chat/completions). Фото чеков и
+        # голосовые остаются на self.client (OpenAI) — DeepSeek не умеет
+        # vision и транскрибацию аудио. Без ключа DeepSeek выключен, текст
+        # идёт на self.client как раньше (deepseek_client остаётся None).
+        self.deepseek_model = deepseek_model
+        self.deepseek_client = deepseek_client or (
+            OpenAI(api_key=deepseek_api_key, base_url=deepseek_base_url) if deepseek_api_key else None
+        )
 
     async def reply(
         self,
@@ -269,6 +333,8 @@ class SmilekitAssistant:
     def _route(
         self, message: str, history: list[ChatMessage], model: str | None
     ) -> str | None:
+        if self.deepseek_client:
+            return self._route_deepseek(message, history)
         history_text = "\n".join(
             f"{item.role}: {item.content}" for item in history[-6:]
         ) or "(новый диалог)"
@@ -292,6 +358,31 @@ class SmilekitAssistant:
             except (json.JSONDecodeError, AttributeError):
                 return None
         return None
+
+    def _route_deepseek(self, message: str, history: list[ChatMessage]) -> str | None:
+        history_text = "\n".join(
+            f"{item.role}: {item.content}" for item in history[-6:]
+        ) or "(новый диалог)"
+        response = self.deepseek_client.chat.completions.create(
+            model=self.deepseek_model,
+            messages=[
+                {"role": "system", "content": f"{ROUTE_PROMPT}\n\n{ROUTE_JSON_HINT}"},
+                {
+                    "role": "user",
+                    "content": f"ИСТОРИЯ:\n{history_text}\n\nСООБЩЕНИЕ КЛИЕНТА:\n{message}",
+                },
+            ],
+            response_format={"type": "json_object"},
+            temperature=0,
+            max_tokens=100,
+        )
+        content = response.choices[0].message.content
+        if not content:
+            return None
+        try:
+            return _parse_json_loose(content).get("template_id")
+        except (json.JSONDecodeError, AttributeError):
+            return None
 
     _RECEIPT_FAILURE = {
         "is_real_receipt_screenshot": False,
@@ -395,6 +486,10 @@ class SmilekitAssistant:
         manager_prompt: str = MANAGER_PROMPT,
         model: str | None = None,
     ) -> str:
+        # Фото у DeepSeek не поддерживается (нет vision) — с картинкой
+        # черновик остаётся на OpenAI, иначе уходит в DeepSeek.
+        if self.deepseek_client and not image_data_url:
+            return self._draft_deepseek(message, history, customer_memory, manager_prompt)
         memory = customer_memory.strip() or "(память пока пуста)"
         response = self.client.responses.create(
             model=model or self.model,
@@ -413,6 +508,32 @@ class SmilekitAssistant:
         text = response.output_text.strip()
         if not text:
             raise RuntimeError("OpenAI returned an empty manager response")
+        return text
+
+    def _draft_deepseek(
+        self,
+        message: str,
+        history: list[ChatMessage],
+        customer_memory: str,
+        manager_prompt: str,
+    ) -> str:
+        memory = customer_memory.strip() or "(память пока пуста)"
+        system = (
+            f"{manager_prompt}\n\nБАЗА ЗНАНИЙ:\n{self.knowledge}\n\n"
+            f"ПАМЯТЬ О КЛИЕНТЕ:\n{memory}"
+        )
+        messages = [{"role": "system", "content": system}]
+        messages.extend({"role": item.role, "content": item.content} for item in history[-16:])
+        messages.append({"role": "user", "content": message})
+        response = self.deepseek_client.chat.completions.create(
+            model=self.deepseek_model,
+            messages=messages,
+            temperature=0.35,
+            max_tokens=900,
+        )
+        text = (response.choices[0].message.content or "").strip()
+        if not text:
+            raise RuntimeError("DeepSeek returned an empty manager response")
         return text
 
     def _review(
@@ -435,6 +556,10 @@ class SmilekitAssistant:
             f"СООБЩЕНИЕ КЛИЕНТА:\n{message}\n\n"
             f"ЧЕРНОВИК:\n{draft}"
         )
+        # Фото у DeepSeek не поддерживается (нет vision) — с картинкой ревью
+        # остаётся на OpenAI, иначе уходит в DeepSeek.
+        if self.deepseek_client and not image_data_url:
+            return self._review_deepseek(review_text, supervisor_prompt)
         review_input = self._current_input(review_text, image_data_url)
         response = self.client.responses.parse(
             model=model or self.model,
@@ -448,3 +573,20 @@ class SmilekitAssistant:
         if result is None:
             raise RuntimeError("OpenAI returned no supervisor result")
         return result
+
+    def _review_deepseek(self, review_text: str, supervisor_prompt: str) -> SupervisorResult:
+        response = self.deepseek_client.chat.completions.create(
+            model=self.deepseek_model,
+            messages=[
+                {"role": "system", "content": f"{supervisor_prompt}\n\n{_SUPERVISOR_JSON_HINT}"},
+                {"role": "user", "content": review_text},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0,
+            max_tokens=900,
+        )
+        content = response.choices[0].message.content
+        if not content:
+            raise RuntimeError("DeepSeek returned no supervisor result")
+        data = _parse_json_loose(content)
+        return SupervisorResult.model_validate(data)

@@ -107,6 +107,9 @@ async def main() -> None:
     assistant = SmilekitAssistant(
         api_key=settings.openai_api_key.get_secret_value(),
         model=settings.openai_model,
+        deepseek_api_key=settings.deepseek_api_key.get_secret_value() or None,
+        deepseek_model=settings.deepseek_model,
+        deepseek_base_url=settings.deepseek_base_url,
     )
     storage = BotStorage(settings.database_path)
     crm = CrmClient(

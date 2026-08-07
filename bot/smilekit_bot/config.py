@@ -7,6 +7,13 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr
     openai_model: str = "gpt-5.6-luna"
     transcription_model: str = "gpt-transcribe"
+    # Текст (черновик/ревью/роутер шаблонов) уходит в DeepSeek — дешевле и не
+    # содержит PII (см. privacy.py); фото чеков и голосовые остаются на
+    # OpenAI выше, так как DeepSeek не умеет vision и транскрибацию аудио.
+    # Пустой ключ = DeepSeek выключен, текст идёт на openai_model как раньше.
+    deepseek_api_key: SecretStr = SecretStr("")
+    deepseek_model: str = "deepseek-v4-flash"
+    deepseek_base_url: str = "https://api.deepseek.com"
     database_path: str = "data/smilekit.db"
     rate_limit_per_minute: int = 10
     max_voice_seconds: int = 180
