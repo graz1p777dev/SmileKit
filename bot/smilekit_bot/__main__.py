@@ -508,40 +508,22 @@ async def main() -> None:
                 schedule_idle_follow_up(chat_id, promised_hours)
                 return
 
-        # Первый контакт — живое приветствие от ИИ (не всегда один и тот же
-        # текст), затем готовый хвост без ИИ: фото до/после, эффект, город.
+        # Первый контакт — готовый сценарий без обращения к ИИ вообще:
+        # экономия полного цикла черновик+проверка на каждый новый диалог.
         # Не важно, чем клиент написал первым — текстом, фото или голосовым.
         if is_new_conversation:
-            current_settings = effective_settings(storage, settings)
-            reply = await assistant.reply(
-                text, [],
-                image_data_url=image_data_url,
-                manager_prompt=current_settings["managerPrompt"],
-                supervisor_prompt=current_settings["supervisorPrompt"],
-                model=current_settings["model"],
-            )
-            parts = split_outgoing_messages(reply.text)
-            for index, part in enumerate(parts):
-                if index:
-                    await bot.send_chat_action(chat_id, ChatAction.TYPING)
-                    await asyncio.sleep(min(2.0, max(0.7, len(part) / 55)) + random.uniform(0.0, 0.35))
-                await message.answer(part)
+            await message.answer(templates.PRODUCT_INFO)
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.8, 1.3))
             await bot.send_media_group(chat_id, media=result_photo_group())
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
-            await asyncio.sleep(random.uniform(0.7, 1.1))
-            await message.answer(templates.FIRST_USE_EFFECT)
-            await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.6, 1.0))
             await message.answer(templates.CITY_QUESTION)
-            greeting = "\n\n".join(parts)
             storage.add_exchange(
                 chat_id, message.message_id,
                 f"[{kind}] {text}" if kind != "text" else text,
-                f"{greeting}\n\n[фото до/после]\n\n{templates.FIRST_USE_EFFECT}\n\n{templates.CITY_QUESTION}", kind,
+                f"{templates.PRODUCT_INFO}\n\n[фото до/после]\n\n{templates.CITY_QUESTION}", kind,
             )
-            storage.update_memory(chat_id, reply.supervisor.customer_memory, reply.supervisor.order_summary)
             storage.schedule_daily_nudge(chat_id, time.time() + DAILY_NUDGE_INTERVAL_SECONDS)
             task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
             follow_up_tasks.add(task)
@@ -699,11 +681,14 @@ async def main() -> None:
             storage.clear_chat(chat_id)
             await message.answer(templates.PRODUCT_INFO)
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
+            await asyncio.sleep(random.uniform(0.8, 1.3))
+            await bot.send_media_group(chat_id, media=result_photo_group())
+            await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.6, 1.0))
             await message.answer(templates.CITY_QUESTION)
             storage.add_exchange(
                 chat_id, message.message_id, "/start",
-                f"{templates.PRODUCT_INFO}\n\n{templates.CITY_QUESTION}", "command",
+                f"{templates.PRODUCT_INFO}\n\n[фото до/после]\n\n{templates.CITY_QUESTION}", "command",
             )
             storage.schedule_daily_nudge(chat_id, time.time() + DAILY_NUDGE_INTERVAL_SECONDS)
             task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
