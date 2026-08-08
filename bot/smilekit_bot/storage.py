@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import threading
 import time
@@ -95,6 +96,17 @@ class BotStorage:
                     paused_at REAL NOT NULL,
                     paused_by TEXT
                 );
+                CREATE TABLE IF NOT EXISTS bot_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER,
+                    level TEXT NOT NULL CHECK (level IN ('info', 'warn', 'error')),
+                    stage TEXT NOT NULL,
+                    event TEXT NOT NULL,
+                    message TEXT NOT NULL DEFAULT '',
+                    details TEXT,
+                    created_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS bot_events_id_idx ON bot_events(id);
                 """
             )
             self._db.commit()
@@ -155,6 +167,57 @@ class BotStorage:
         with self._lock:
             self._db.execute("DELETE FROM paused_chats WHERE chat_id = ?", (chat_id,))
             self._db.commit()
+
+    def log_event(
+        self,
+        chat_id: int | None,
+        level: str,
+        stage: str,
+        event: str,
+        message: str = "",
+        details: dict | None = None,
+    ) -> None:
+        """Живой журнал того, что делает бот — читает CRM (живой стрим на
+        странице настроек). Сбой записи лога не должен ронять сам бот."""
+        try:
+            with self._lock:
+                self._db.execute(
+                    """
+                    INSERT INTO bot_events (chat_id, level, stage, event, message, details, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (chat_id, level, stage, event, message, json.dumps(details) if details else None, time.time()),
+                )
+                self._db.commit()
+        except Exception:
+            pass
+
+    def list_events(self, *, level: str | None = None, since_id: int = 0, limit: int = 150) -> list[dict]:
+        safe_limit = max(1, min(limit, 500))
+        with self._lock:
+            if level:
+                rows = self._db.execute(
+                    "SELECT * FROM bot_events WHERE level = ? AND id > ? ORDER BY id DESC LIMIT ?",
+                    (level, since_id, safe_limit),
+                ).fetchall()
+            else:
+                rows = self._db.execute(
+                    "SELECT * FROM bot_events WHERE id > ? ORDER BY id DESC LIMIT ?",
+                    (since_id, safe_limit),
+                ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "chatId": row["chat_id"],
+                "level": row["level"],
+                "stage": row["stage"],
+                "event": row["event"],
+                "message": row["message"],
+                "details": json.loads(row["details"]) if row["details"] else None,
+                "createdAt": row["created_at"],
+            }
+            for row in rows
+        ]
 
     def get_bot_setting(self, key: str) -> str | None:
         """Сохранённый override настройки бота или None, если его нет.

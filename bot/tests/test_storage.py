@@ -224,3 +224,33 @@ def test_incoming_message_count(tmp_path):
     storage.add_exchange(1, 2, "Цена?", "1490 сом", "text")
     assert storage.incoming_message_count(1) == 2
     storage.close()
+
+
+def test_log_event_and_list_events(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    storage.log_event(1, "info", "reply", "reply.ai_generated", "Ответ отправлен", {"parts": 2})
+    storage.log_event(2, "error", "order", "order.receipt_mismatch", "Чек не прошёл проверку")
+
+    events = storage.list_events()
+    assert len(events) == 2
+    # Новые сверху.
+    assert events[0]["event"] == "order.receipt_mismatch"
+    assert events[0]["level"] == "error"
+    assert events[1]["event"] == "reply.ai_generated"
+    assert events[1]["details"] == {"parts": 2}
+
+    only_errors = storage.list_events(level="error")
+    assert [e["event"] for e in only_errors] == ["order.receipt_mismatch"]
+
+    newest_id = events[0]["id"]
+    storage.log_event(1, "info", "nudge", "nudge.idle", "Напоминание отправлено")
+    fresh = storage.list_events(since_id=newest_id)
+    assert [e["event"] for e in fresh] == ["nudge.idle"]
+    storage.close()
+
+
+def test_log_event_failure_does_not_raise(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    storage.close()
+    # После close() запись должна тихо проглотить ошибку, а не уронить бота.
+    storage.log_event(1, "info", "reply", "reply.ai_generated", "Ответ отправлен")

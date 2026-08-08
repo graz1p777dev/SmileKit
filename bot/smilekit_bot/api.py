@@ -174,6 +174,7 @@ async def post_chat_pause_handler(request: web.Request) -> web.Response:
         return web.json_response({"error": "invalid chat_id"}, status=400)
     storage.cancel_nudge_follow_ups(chat_id)
     storage.pause_chat(chat_id, time.time())
+    storage.log_event(chat_id, "info", "operator", "chat.paused", "Чат поставлен на паузу из CRM")
     return web.json_response({"paused": True})
 
 
@@ -187,6 +188,7 @@ async def post_chat_resume_handler(request: web.Request) -> web.Response:
     except ValueError:
         return web.json_response({"error": "invalid chat_id"}, status=400)
     storage.resume_chat(chat_id)
+    storage.log_event(chat_id, "info", "operator", "chat.resumed", "Бот снова отвечает в этом чате")
     return web.json_response({"paused": False})
 
 
@@ -217,7 +219,28 @@ async def post_chat_message_handler(request: web.Request) -> web.Response:
     storage.cancel_nudge_follow_ups(chat_id)
     storage.pause_chat(chat_id, time.time(), paused_by="operator")
     storage.add_operator_message(chat_id, sent.message_id, text)
+    storage.log_event(chat_id, "info", "operator", "chat.manual_message", "Оператор написал клиенту вручную из CRM")
     return web.json_response({"paused": True})
+
+
+async def get_events_handler(request: web.Request) -> web.Response:
+    """Живой журнал того, что делает бот — CRM опрашивает раз в несколько
+    секунд (see_id — отдаёт только события новее уже полученных)."""
+    denied = _require_auth(request)
+    if denied is not None:
+        return denied
+    storage: BotStorage = request.app["storage"]
+    try:
+        since_id = int(request.query.get("sinceId", "0"))
+    except ValueError:
+        since_id = 0
+    try:
+        limit = int(request.query.get("limit", "150"))
+    except ValueError:
+        limit = 150
+    level = request.query.get("level") or None
+    events = storage.list_events(level=level, since_id=since_id, limit=limit)
+    return web.json_response({"events": events})
 
 
 async def post_lab_handler(request: web.Request) -> web.Response:
@@ -288,4 +311,5 @@ def create_app(
     app.router.add_post("/internal/chats/{chat_id}/pause", post_chat_pause_handler)
     app.router.add_post("/internal/chats/{chat_id}/resume", post_chat_resume_handler)
     app.router.add_post("/internal/chats/{chat_id}/message", post_chat_message_handler)
+    app.router.add_get("/internal/events", get_events_handler)
     return app

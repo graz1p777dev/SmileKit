@@ -161,6 +161,7 @@ async def main() -> None:
         text = "Если хотите, могу отправить ещё отзывы наших клиентов 😊"
         sent = await bot.send_message(chat_id, text)
         storage.add_operator_message(chat_id, sent.message_id, text)
+        storage.log_event(chat_id, "info", "nudge", "nudge.results_follow_up", "Дожим после результатов отправлен")
 
     async def idle_nudge(chat_id: int, message_id: int) -> None:
         """Клиент замолчал после ответа бота — напоминаем об эффекте один раз
@@ -182,6 +183,7 @@ async def main() -> None:
         else:
             sent = await bot.send_message(chat_id, templates.FIRST_USE_EFFECT)
         storage.add_operator_message(chat_id, sent.message_id, templates.FIRST_USE_EFFECT)
+        storage.log_event(chat_id, "info", "nudge", "nudge.idle", "Напоминание об эффекте после простоя отправлено")
 
     async def check_daily_nudges() -> None:
         while True:
@@ -197,8 +199,10 @@ async def main() -> None:
                     daily_text = templates.daily_discount_offer(currency)
                     sent = await bot.send_message(chat_id, daily_text)
                     storage.add_operator_message(chat_id, sent.message_id, daily_text)
+                    storage.log_event(chat_id, "info", "nudge", "nudge.daily_discount", "Ежедневное напоминание про скидку отправлено")
                 except Exception:
                     logging.exception("Daily nudge send failed chat=%s", chat_id)
+                    storage.log_event(chat_id, "error", "nudge", "nudge.daily_discount_failed", "Не удалось отправить ежедневное напоминание")
                 storage.advance_daily_nudge(chat_id, now + DAILY_NUDGE_INTERVAL_SECONDS)
 
     async def check_nudge_follow_ups() -> None:
@@ -225,6 +229,7 @@ async def main() -> None:
                         variant = templates.AWAITING_PAYMENT_REMINDERS[(count - 1) % len(templates.AWAITING_PAYMENT_REMINDERS)]
                         sent = await bot.send_message(chat_id, variant)
                         storage.add_operator_message(chat_id, sent.message_id, variant)
+                        storage.log_event(chat_id, "info", "nudge", "nudge.awaiting_payment", f"Напоминание про оплату отправлено ({count}/{AWAITING_PAYMENT_MAX_REMINDERS})")
                         if count < AWAITING_PAYMENT_MAX_REMINDERS:
                             storage.schedule_awaiting_payment_reminder(
                                 chat_id, now + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
@@ -246,8 +251,10 @@ async def main() -> None:
                     await asyncio.sleep(random.uniform(0.6, 1.0))
                     sent = await bot.send_message(chat_id, text)
                     storage.add_operator_message(chat_id, sent.message_id, text)
+                    storage.log_event(chat_id, "info", "nudge", f"nudge.{kind}", f"Дожим простоя «{kind}» отправлен")
                 except Exception:
                     logging.exception("Nudge follow-up send failed chat=%s kind=%s", chat_id, kind)
+                    storage.log_event(chat_id, "error", "nudge", "nudge.failed", f"Не удалось отправить дожим «{kind}»")
 
     async def _submit_order_and_advance(chat_id: int, payload: dict) -> None:
         delivered = await crm.send_order(payload)
@@ -304,6 +311,11 @@ async def main() -> None:
                 logging.warning("QR code file missing at %s — assets/qrcode.jpeg not provided", QR_CODE_PATH)
             storage.schedule_awaiting_payment_reminder(
                 chat_id, time.time() + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
+            )
+            storage.log_event(
+                chat_id, "info", "order", "order.confirmed",
+                "Заказ подтверждён через ИИ-диалог, QR отправлен",
+                {"amount": amount, "currency": currency, "city": payload.get("city")},
             )
         if not crm.enabled:
             return True
@@ -424,6 +436,7 @@ async def main() -> None:
                 kind,
             )
             logging.info("Chat paused, skipping auto-reply chat=%s message=%s", chat_id, message.message_id)
+            storage.log_event(chat_id, "info", "message", "message.paused_skip", "Чат на паузе — сообщение сохранено, бот молчит")
             return
 
         history = storage.history(chat_id)
@@ -457,6 +470,7 @@ async def main() -> None:
             await message.answer(templates.CLARIFY_VAGUE_DATE_REPLY)
             storage.add_exchange(chat_id, message.message_id, text, templates.CLARIFY_VAGUE_DATE_REPLY, kind)
             logging.info("Vague future promise, asked to clarify chat=%s message=%s", chat_id, message.message_id)
+            storage.log_event(chat_id, "info", "message", "message.vague_promise", "Клиент отложил заказ без даты — уточняем", {"text": text})
             schedule_idle_follow_up(chat_id, None)
             return
 
@@ -477,6 +491,7 @@ async def main() -> None:
             crm_tasks.add(stage_task)
             stage_task.add_done_callback(crm_tasks.discard)
             logging.info("Complaint detected chat=%s message=%s", chat_id, message.message_id)
+            storage.log_event(chat_id, "warn", "message", "message.complaint", "Обнаружена жалоба — сделка перенесена в «Нестандартный запрос»", {"text": text})
             schedule_idle_follow_up(chat_id, promised_hours)
             return
 
@@ -497,6 +512,7 @@ async def main() -> None:
             crm_tasks.add(stage_task)
             stage_task.add_done_callback(crm_tasks.discard)
             logging.info("Cooperation inquiry detected chat=%s message=%s", chat_id, message.message_id)
+            storage.log_event(chat_id, "info", "message", "message.cooperation", "Запрос о сотрудничестве/опте — сделка перенесена в «Нестандартный запрос»", {"text": text})
             schedule_idle_follow_up(chat_id, promised_hours)
             return
 
@@ -535,6 +551,7 @@ async def main() -> None:
                 chat_id, time.time() + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
             )
             logging.info("Payment info requested chat=%s message=%s", chat_id, message.message_id)
+            storage.log_event(chat_id, "info", "order", "order.qr_sent", "QR и запрос чек/адрес/имя/телефон отправлены", {"text": text})
             return
 
         # Явное возражение («я подумаю», «дорого») — готовый ответ вместо
@@ -598,6 +615,7 @@ async def main() -> None:
                     "Template routed chat=%s message=%s template=%s",
                     chat_id, message.message_id, template_id,
                 )
+                storage.log_event(chat_id, "info", "reply", "reply.routed_template", f"Готовый шаблон «{template_id}» вместо генерации", {"templateId": template_id})
                 task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
                 follow_up_tasks.add(task)
                 task.add_done_callback(follow_up_tasks.discard)
@@ -684,6 +702,11 @@ async def main() -> None:
             chat_id,
             message.message_id,
             len(parts),
+        )
+        storage.log_event(
+            chat_id, "info", "reply", "reply.ai_generated",
+            "ИИ сгенерировал и отправил ответ",
+            {"parts": len(parts), "reviewStatus": reply.supervisor.status},
         )
         stored_reply = "\n\n".join(parts)
         storage.add_exchange(
@@ -777,11 +800,13 @@ async def main() -> None:
             task = asyncio.create_task(push_to_delivery_group(pending, file_id, kind))
             crm_tasks.add(task)
             task.add_done_callback(crm_tasks.discard)
+            storage.log_event(chat_id, "info", "order", "order.receipt_verified", "Чек прошёл проверку, заказ подтверждён")
         else:
             await message.answer(templates.RECEIPT_MISMATCH)
             storage.schedule_awaiting_payment_reminder(
                 chat_id, time.time() + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
             )
+            storage.log_event(chat_id, "warn", "order", "order.receipt_mismatch", "Чек не прошёл проверку", result)
 
     @dp.message(F.photo)
     async def handle_photo(message: Message) -> None:

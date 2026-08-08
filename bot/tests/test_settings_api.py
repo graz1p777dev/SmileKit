@@ -330,3 +330,27 @@ async def test_chat_message_requires_text(tmp_path):
             json={},
         )
         assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_events_endpoint_returns_newest_first_and_filters_since_id(tmp_path):
+    async with running_client(tmp_path) as (client, storage, settings):
+        storage.log_event(1, "info", "reply", "reply.ai_generated", "Первое")
+        storage.log_event(2, "warn", "order", "order.receipt_mismatch", "Второе")
+
+        resp = await client.get("/internal/events", headers={"x-internal-token": TOKEN})
+        assert resp.status == 200
+        data = await resp.json()
+        assert [e["event"] for e in data["events"]] == ["order.receipt_mismatch", "reply.ai_generated"]
+
+        newest_id = data["events"][0]["id"]
+        resp2 = await client.get(f"/internal/events?sinceId={newest_id}", headers={"x-internal-token": TOKEN})
+        data2 = await resp2.json()
+        assert data2["events"] == []
+
+
+@pytest.mark.asyncio
+async def test_events_endpoint_requires_auth(tmp_path):
+    async with running_client(tmp_path) as (client, storage, settings):
+        resp = await client.get("/internal/events")
+        assert resp.status == 403
