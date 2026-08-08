@@ -494,14 +494,20 @@ async def main() -> None:
             schedule_idle_follow_up(chat_id, promised_hours)
             return
 
-        # Клиент прямо спрашивает реквизиты/куда платить — раньше это уходило
-        # в свободную генерацию, и та просто называла номер менеджера вместо
-        # того, чтобы сразу дать QR.
-        if kind == "text" and wants_payment_info(text) and storage.get_pending_payment(chat_id) is None:
+        # Клиент прямо спрашивает реквизиты/куда платить, либо уже подтвердил
+        # заказ («можно оформить», «давайте», «беру») — в обоих случаях сразу
+        # даём QR и просим чек/адрес/имя/телефон одним сообщением, а не
+        # собираем эти же данные через диалог с ИИ перед тем, как показать QR.
+        if (
+            kind == "text"
+            and not is_new_conversation
+            and (wants_payment_info(text) or wants_to_order(text))
+            and storage.get_pending_payment(chat_id) is None
+        ):
             default_amount = 1190 if storage.has_event(chat_id, "discount_offered") else 1490
             storage.save_pending_payment(
                 chat_id,
-                order_summary="Клиент запросил реквизиты оплаты",
+                order_summary="Клиент подтвердил заказ / запросил реквизиты оплаты",
                 amount=default_amount,
                 currency="KGS",
                 customer_name=None,
