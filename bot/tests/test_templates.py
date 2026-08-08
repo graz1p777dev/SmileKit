@@ -12,8 +12,16 @@ def test_other_kg_cities_use_yldam_express():
 
 
 def test_unrecognized_city_returns_none():
-    assert templates.delivery_template_for_city("Алматы") is None
+    assert templates.delivery_template_for_city("Париж") is None
     assert templates.delivery_template_for_city("не знаю") is None
+
+
+def test_kz_uz_ru_cities_use_matching_delivery():
+    assert templates.delivery_template_for_city("я из Алматы") == templates.DELIVERY_KZ_ALMATY
+    assert templates.delivery_template_for_city("живу в Астане") == templates.DELIVERY_KZ_OTHER
+    assert templates.delivery_template_for_city("я из ташкента") == templates.DELIVERY_UZ_TASHKENT
+    assert templates.delivery_template_for_city("живу в Москве") == templates.DELIVERY_RU
+    assert templates.delivery_template_for_city("я из России") == templates.DELIVERY_RU
 
 
 def test_currency_for_history_detects_country_by_city():

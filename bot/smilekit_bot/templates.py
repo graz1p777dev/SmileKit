@@ -117,8 +117,8 @@ IDLE_FOLLOWUP = (
 )
 
 DISCOUNT_FOLLOWUP = (
-    "Здравствуйте 😊 Кстати, для вас доступна скидка 20% — набор можно оформить "
-    "за 1190 сом. Хотите оформить доставку?"
+    "Кстати, сейчас на товар действует скидка 20%. Вместо 1490 сом вы можете "
+    "купить его за 1190 сом. Скидка действует только сегодня. Оформить заказ?"
 )
 
 AFTER_CONSULT_FOLLOWUP = (
@@ -136,7 +136,10 @@ ORDER_INCOMPLETE_FOLLOWUP = (
     "Хотите продолжить или заказ уже неактуален?"
 )
 
-PROMISED_FOLLOWUP = DISCOUNT_FOLLOWUP
+PROMISED_FOLLOWUP = (
+    "Здравствуйте 😊 Кстати, сегодня на SmileKit действует скидка 20% — набор "
+    "можно оформить за 1190 сом. Скидка действует только сегодня. Вам оформить доставку?"
+)
 
 THINKING_REPLY = (
     "Хорошо, понимаю. Подскажите только, что пока останавливает: цена, "
@@ -200,14 +203,34 @@ BISHKEK_MARKERS = ("бишкек", "токмок")
 OTHER_KG_CITY_MARKERS = (
     "ош", "джалал-абад", "джалалабад", "каракол", "нарын", "талас", "баткен",
 )
+KZ_ALMATY_MARKERS = ("алмат",)
+KZ_OTHER_MARKERS = ("астан",)
+UZ_TASHKENT_MARKERS = ("ташкент",)
+RU_MARKERS = ("москв", "росси")
+
+DELIVERY_KZ_ALMATY = "Да, доставим! В Алматы — ориентировочно в течение 30 минут"
+DELIVERY_KZ_OTHER = "Да, доставим! По остальным регионам Казахстана — ориентировочно за 1–3 дня"
+DELIVERY_UZ_TASHKENT = "Да, доставим! В Ташкенте — ориентировочно в течение 1 часа"
+DELIVERY_RU = (
+    "Своего склада в России нет, отправляем через СДЭК — доставка от 7 дней. "
+    "Точную стоимость доставки уточним отдельно"
+)
 
 
 def delivery_template_for_city(text: str) -> str | None:
-    """Шаблон доставки по упомянутому городу. None — город не распознан
-    (например иностранный) или не назван вообще."""
+    """Шаблон доставки по упомянутому городу/стране. None — не распознан
+    (например иностранный, не входящий в список ниже) или не назван вообще."""
     normalized = " ".join(text.lower().split())
     if any(marker in normalized for marker in BISHKEK_MARKERS):
         return DELIVERY_BISHKEK
     if any(marker in normalized for marker in OTHER_KG_CITY_MARKERS):
         return DELIVERY_OTHER_KG
+    if any(marker in normalized for marker in KZ_ALMATY_MARKERS):
+        return DELIVERY_KZ_ALMATY
+    if any(marker in normalized for marker in KZ_OTHER_MARKERS):
+        return DELIVERY_KZ_OTHER
+    if any(marker in normalized for marker in UZ_TASHKENT_MARKERS):
+        return DELIVERY_UZ_TASHKENT
+    if any(marker in normalized for marker in RU_MARKERS):
+        return DELIVERY_RU
     return None
