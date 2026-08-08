@@ -478,6 +478,9 @@ def test_wants_payment_info_detects_requisites_questions():
     assert wants_payment_info("Реквизиты")
     assert wants_payment_info("Куда скинуть?")
     assert wants_payment_info("как оплатить можно")
+    assert wants_payment_info("Можно qr код")
+    assert wants_payment_info("дайте qr")
+    assert wants_payment_info("скиньте кр код")
     assert not wants_payment_info("Сколько стоит?")
 
 
