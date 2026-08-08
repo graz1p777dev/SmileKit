@@ -50,6 +50,32 @@ def test_long_answer_and_explanation_are_split_after_direct_answer():
     ]
 
 
+def test_hallucinated_tags_are_stripped_entirely():
+    """Модель иногда сама выдумывает теги вроде <НЕ_ВИДНО_КЛИЕНТУ>...</...>,
+    пытаясь пометить кусок текста как внутренний — таких тегов система не
+    поддерживает, и без защиты они уходят клиенту буквально (баг на проде)."""
+    text = (
+        "Хорошо, поняла вас."
+        "<НЕ_ВИДНО_КЛИЕНТУ>Если решите попробовать — мы рядом, поможем "
+        "с заказом и подскажем по применению.</НЕ_ВИДНО_КЛИЕНТУ>"
+    )
+    result = split_outgoing_messages(text)
+    assert result == ["Хорошо, поняла вас."]
+    assert "НЕ_ВИДНО_КЛИЕНТУ" not in result[0]
+
+
+def test_stray_unmatched_tag_is_stripped():
+    result = split_outgoing_messages("Цена 1490 сом.</ВНУТРЕННЯЯ_ЗАМЕТКА>")
+    assert result == ["Цена 1490 сом."]
+
+
+def test_next_message_separator_survives_tag_stripping():
+    result = split_outgoing_messages(
+        f"Цена 1490 сом.{MESSAGE_SEPARATOR}Из какого вы города?"
+    )
+    assert result == ["Цена 1490 сом.", "Из какого вы города?"]
+
+
 def test_long_safety_advice_stays_together():
     text = (
         "При сильной боли прекратите применение. Это может требовать осмотра. "
