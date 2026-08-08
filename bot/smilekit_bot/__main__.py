@@ -539,15 +539,12 @@ async def main() -> None:
         if is_new_conversation:
             await message.answer(templates.PRODUCT_INFO)
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
-            await asyncio.sleep(random.uniform(0.8, 1.3))
-            await bot.send_media_group(chat_id, media=result_photo_group())
-            await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.6, 1.0))
             await message.answer(templates.CITY_QUESTION)
             storage.add_exchange(
                 chat_id, message.message_id,
                 f"[{kind}] {text}" if kind != "text" else text,
-                f"{templates.PRODUCT_INFO}\n\n[фото до/после]\n\n{templates.CITY_QUESTION}", kind,
+                f"{templates.PRODUCT_INFO}\n\n{templates.CITY_QUESTION}", kind,
             )
             storage.schedule_daily_nudge(chat_id, time.time() + DAILY_NUDGE_INTERVAL_SECONDS)
             task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
@@ -706,14 +703,11 @@ async def main() -> None:
             storage.clear_chat(chat_id)
             await message.answer(templates.PRODUCT_INFO)
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
-            await asyncio.sleep(random.uniform(0.8, 1.3))
-            await bot.send_media_group(chat_id, media=result_photo_group())
-            await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.6, 1.0))
             await message.answer(templates.CITY_QUESTION)
             storage.add_exchange(
                 chat_id, message.message_id, "/start",
-                f"{templates.PRODUCT_INFO}\n\n[фото до/после]\n\n{templates.CITY_QUESTION}", "command",
+                f"{templates.PRODUCT_INFO}\n\n{templates.CITY_QUESTION}", "command",
             )
             storage.schedule_daily_nudge(chat_id, time.time() + DAILY_NUDGE_INTERVAL_SECONDS)
             task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
