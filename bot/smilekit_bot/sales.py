@@ -228,3 +228,28 @@ def mentions_cooperation_inquiry(text: str) -> bool:
     """Опт/партнёрство/реклама — не обычный розничный покупатель, такой
     диалог не ведём по стандартному сценарию, а передаём человеку."""
     return bool(_COOPERATION_MARKERS.search(text))
+
+
+_SHORT_AFFIRMATION = re.compile(
+    r"^(?:да|ага|угу|ок|окей|хорошо|давай|давайте|го|согласен|согласна)[!.\s]*$",
+    re.IGNORECASE,
+)
+
+
+def is_short_affirmation(text: str) -> bool:
+    """Голое согласие («давайте», «да», «ок») — само по себе неоднозначно,
+    имеет смысл только вместе с тем, что предлагал последний ответ бота."""
+    return bool(_SHORT_AFFIRMATION.match(text.strip()))
+
+
+_ORDER_CTA_MARKERS = ("оформить доставку", "оформить заказ")
+
+
+def confirms_order_offer(text: str, last_assistant_message: str) -> bool:
+    """Клиент коротко согласился («давайте») именно на предложение оформить
+    доставку/заказ — а не на что-то другое, что бот предложил последним
+    (например «отправить ещё отзывы»)."""
+    if not is_short_affirmation(text):
+        return False
+    lowered = (last_assistant_message or "").lower()
+    return any(marker in lowered for marker in _ORDER_CTA_MARKERS)

@@ -451,6 +451,17 @@ def test_mentions_cooperation_inquiry_detects_wholesale_and_partnership():
     assert not mentions_cooperation_inquiry("Сколько стоит одна коробка?")
 
 
+def test_confirms_order_offer_only_when_last_bot_message_offered_order():
+    from smilekit_bot.sales import confirms_order_offer
+
+    assert confirms_order_offer("давайте", "Вам оформить доставку?")
+    assert confirms_order_offer("Да!", "Отлично, вам оформить заказ?")
+    assert not confirms_order_offer(
+        "давайте", "Если хотите, могу отправить ещё отзывы наших клиентов 😊"
+    )
+    assert not confirms_order_offer("1490 сом это дорого", "Вам оформить доставку?")
+
+
 def test_mentions_vague_future_promise_requires_clarification():
     from smilekit_bot.sales import mentions_vague_future_promise
 

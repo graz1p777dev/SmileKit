@@ -28,6 +28,7 @@ from .media import result_photo_group, should_send_results_after_city, wants_res
 from .outgoing import split_outgoing_messages
 from .sales import (
     classify_objection,
+    confirms_order_offer,
     is_complaint,
     mentions_cooperation_inquiry,
     mentions_vague_future_promise,
@@ -157,10 +158,9 @@ async def main() -> None:
             return
         await bot.send_chat_action(chat_id, ChatAction.TYPING)
         await asyncio.sleep(random.uniform(0.8, 1.3))
-        await bot.send_message(
-            chat_id,
-            "Если хотите, могу отправить ещё отзывы наших клиентов 😊",
-        )
+        text = "Если хотите, могу отправить ещё отзывы наших клиентов 😊"
+        sent = await bot.send_message(chat_id, text)
+        storage.add_operator_message(chat_id, sent.message_id, text)
 
     async def idle_nudge(chat_id: int, message_id: int) -> None:
         """Клиент замолчал после ответа бота — напоминаем об эффекте один раз
@@ -178,9 +178,10 @@ async def main() -> None:
         await bot.send_chat_action(chat_id, ChatAction.TYPING)
         await asyncio.sleep(random.uniform(0.8, 1.3))
         if EFFECT_PHOTO_PATH.exists():
-            await bot.send_photo(chat_id, FSInputFile(EFFECT_PHOTO_PATH), caption=templates.FIRST_USE_EFFECT)
+            sent = await bot.send_photo(chat_id, FSInputFile(EFFECT_PHOTO_PATH), caption=templates.FIRST_USE_EFFECT)
         else:
-            await bot.send_message(chat_id, templates.FIRST_USE_EFFECT)
+            sent = await bot.send_message(chat_id, templates.FIRST_USE_EFFECT)
+        storage.add_operator_message(chat_id, sent.message_id, templates.FIRST_USE_EFFECT)
 
     async def check_daily_nudges() -> None:
         while True:
@@ -193,7 +194,9 @@ async def main() -> None:
                     )
                     await bot.send_chat_action(chat_id, ChatAction.TYPING)
                     await asyncio.sleep(random.uniform(0.6, 1.0))
-                    await bot.send_message(chat_id, templates.daily_discount_offer(currency))
+                    daily_text = templates.daily_discount_offer(currency)
+                    sent = await bot.send_message(chat_id, daily_text)
+                    storage.add_operator_message(chat_id, sent.message_id, daily_text)
                 except Exception:
                     logging.exception("Daily nudge send failed chat=%s", chat_id)
                 storage.advance_daily_nudge(chat_id, now + DAILY_NUDGE_INTERVAL_SECONDS)
@@ -220,7 +223,8 @@ async def main() -> None:
                         await bot.send_chat_action(chat_id, ChatAction.TYPING)
                         await asyncio.sleep(random.uniform(0.6, 1.0))
                         variant = templates.AWAITING_PAYMENT_REMINDERS[(count - 1) % len(templates.AWAITING_PAYMENT_REMINDERS)]
-                        await bot.send_message(chat_id, variant)
+                        sent = await bot.send_message(chat_id, variant)
+                        storage.add_operator_message(chat_id, sent.message_id, variant)
                         if count < AWAITING_PAYMENT_MAX_REMINDERS:
                             storage.schedule_awaiting_payment_reminder(
                                 chat_id, now + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
@@ -240,7 +244,8 @@ async def main() -> None:
                     text = templates.fill_nudge_template(template, author.first_name)
                     await bot.send_chat_action(chat_id, ChatAction.TYPING)
                     await asyncio.sleep(random.uniform(0.6, 1.0))
-                    await bot.send_message(chat_id, text)
+                    sent = await bot.send_message(chat_id, text)
+                    storage.add_operator_message(chat_id, sent.message_id, text)
                 except Exception:
                     logging.exception("Nudge follow-up send failed chat=%s kind=%s", chat_id, kind)
 
@@ -291,7 +296,8 @@ async def main() -> None:
             )
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.6, 1.0))
-            await message.answer(templates.PAYMENT_QR_MESSAGE)
+            qr_message = await message.answer(templates.PAYMENT_QR_MESSAGE)
+            storage.add_operator_message(chat_id, qr_message.message_id, templates.PAYMENT_QR_MESSAGE)
             if QR_CODE_PATH.exists():
                 await bot.send_photo(chat_id, FSInputFile(QR_CODE_PATH))
             else:
@@ -498,10 +504,17 @@ async def main() -> None:
         # заказ («можно оформить», «давайте», «беру») — в обоих случаях сразу
         # даём QR и просим чек/адрес/имя/телефон одним сообщением, а не
         # собираем эти же данные через диалог с ИИ перед тем, как показать QR.
+        last_assistant_message = next(
+            (item.content for item in reversed(history) if item.role == "assistant"), ""
+        )
         if (
             kind == "text"
             and not is_new_conversation
-            and (wants_payment_info(text) or wants_to_order(text))
+            and (
+                wants_payment_info(text)
+                or wants_to_order(text)
+                or confirms_order_offer(text, last_assistant_message)
+            )
             and storage.get_pending_payment(chat_id) is None
         ):
             default_amount = 1190 if storage.has_event(chat_id, "discount_offered") else 1490
