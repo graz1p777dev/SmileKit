@@ -5,7 +5,12 @@ import pytest
 
 from smilekit_bot import templates
 from smilekit_bot.models import ChatMessage, CrmAction, SupervisorResult
-from smilekit_bot.media import should_send_results_after_city, wants_result_photos
+from smilekit_bot.media import (
+    confirms_review_offer,
+    should_send_results_after_city,
+    wants_result_photos,
+    wants_review_photos,
+)
 from smilekit_bot.prompts import MANAGER_PROMPT, SUPERVISOR_PROMPT
 from smilekit_bot.service import FALLBACK_TEXT, SmilekitAssistant
 from smilekit_bot.sales import ensure_manager_contact, wants_to_order
@@ -360,6 +365,19 @@ def test_explicit_photo_request_is_detected():
 
 def test_complaint_does_not_trigger_result_photos():
     assert not wants_result_photos("У меня боль и плохой результат")
+
+
+def test_wants_review_photos_detects_review_requests():
+    assert wants_review_photos("А можете скинуть отзывы ваши")
+    assert wants_review_photos("Есть отзывы клиентов?")
+    assert not wants_review_photos("У меня жалоба, плохой отзыв о вас")
+
+
+def test_confirms_review_offer_only_after_bot_offered_reviews():
+    assert confirms_review_offer("Ну отправьте", "Конечно, сейчас отправлю вам отзывы клиентов 😊")
+    assert confirms_review_offer("давайте", "Если хотите, могу отправить ещё отзывы наших клиентов 😊")
+    assert not confirms_review_offer("Ну отправьте", "Вам оформить доставку?")
+    assert not confirms_review_offer("1490 сом это дорого", "Вот отзывы наших клиентов")
 
 
 def test_city_after_price_triggers_results_only_for_sales_funnel():

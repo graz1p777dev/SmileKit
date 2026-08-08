@@ -24,7 +24,14 @@ from .crm import (
     stage_action_for_inbound,
 )
 from . import templates
-from .media import result_photo_group, should_send_results_after_city, wants_result_photos
+from .media import (
+    confirms_review_offer,
+    result_photo_group,
+    review_photo_group,
+    should_send_results_after_city,
+    wants_result_photos,
+    wants_review_photos,
+)
 from .outgoing import split_outgoing_messages
 from .sales import (
     classify_objection,
@@ -738,6 +745,10 @@ async def main() -> None:
             )
             follow_up_tasks.add(task)
             task.add_done_callback(follow_up_tasks.discard)
+        elif kind == "text" and (wants_review_photos(text) or confirms_review_offer(text, last_assistant_message)):
+            await message.answer("Вот отзывы наших клиентов 👇")
+            await bot.send_media_group(chat_id, media=review_photo_group())
+            storage.log_event(chat_id, "info", "reply", "reply.reviews_sent", "Отправлены фото отзывов клиентов")
 
     @dp.message(CommandStart())
     async def start(message: Message) -> None:
