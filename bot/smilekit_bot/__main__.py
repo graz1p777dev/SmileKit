@@ -645,10 +645,13 @@ async def main() -> None:
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.7, 1.1))
             await message.answer("Вам оформить доставку?")
-            storage.add_exchange(
-                chat_id, message.message_id, text,
-                "[результаты + эффект + доставка + вопрос про оформление]", kind,
-            )
+            stored_reply = "\n\n".join(filter(None, [
+                delivery_text,
+                "[фото до/после]",
+                templates.FIRST_USE_EFFECT,
+                "Вам оформить доставку?",
+            ]))
+            storage.add_exchange(chat_id, message.message_id, text, stored_reply, kind)
             task = asyncio.create_task(follow_up_after_results(chat_id, message.message_id))
             follow_up_tasks.add(task)
             task.add_done_callback(follow_up_tasks.discard)
