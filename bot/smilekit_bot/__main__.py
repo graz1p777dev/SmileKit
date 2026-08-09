@@ -92,6 +92,7 @@ NUDGE_CHECK_INTERVAL_SECONDS = 15 * 60
 QR_CODE_PATH = Path(__file__).resolve().parent.parent / "assets" / "qrcode.jpeg"
 INSTRUCTIONS_IMAGE_PATH = Path(__file__).resolve().parent.parent / "assets" / "instructia.jpeg"
 EFFECT_PHOTO_PATH = Path(__file__).resolve().parent.parent / "assets" / "results" / "after.jpg"
+FIRST_USE_EFFECT_VOICE_PATH = Path(__file__).resolve().parent.parent / "assets" / "voice" / "first_use_effect.ogg"
 # Дожим по оплате: QR не шлём повторно, только переспрашиваем; после
 # нескольких напоминаний останавливаемся — менеджер разберётся вручную,
 # когда клиент всё же пришлёт чек.
@@ -664,16 +665,16 @@ async def main() -> None:
                 await asyncio.sleep(random.uniform(0.7, 1.1))
             await message.answer("Вот результат нашего клиента до и после применения 👇")
             await bot.send_media_group(chat_id, media=result_photo_group())
-            await bot.send_chat_action(chat_id, ChatAction.TYPING)
+            await bot.send_chat_action(chat_id, ChatAction.RECORD_VOICE)
             await asyncio.sleep(random.uniform(0.8, 1.3))
-            await message.answer(templates.FIRST_USE_EFFECT)
+            await bot.send_voice(chat_id, FSInputFile(FIRST_USE_EFFECT_VOICE_PATH))
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.7, 1.1))
             await message.answer("Вам оформить доставку?")
             stored_reply = "\n\n".join(filter(None, [
                 delivery_text,
                 "[фото до/после]",
-                templates.FIRST_USE_EFFECT,
+                "[голосовое: эффект после первого применения]",
                 "Вам оформить доставку?",
             ]))
             storage.add_exchange(chat_id, message.message_id, text, stored_reply, kind)
