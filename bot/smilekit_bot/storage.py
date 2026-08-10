@@ -111,6 +111,20 @@ class BotStorage:
             )
             self._db.commit()
             self._migrate_nudge_follow_ups_promised_kind()
+            self._migrate_messages_sender()
+
+    def _migrate_messages_sender(self) -> None:
+        """sender различает автора исходящего: bot | operator (role остаётся
+        как есть — для истории ИИ оба выглядят репликой ассистента).
+        Историческим строкам до миграции ставим bot/client по role."""
+        with self._lock:
+            cols = [row["name"] for row in self._db.execute("PRAGMA table_info(messages)")]
+            if "sender" not in cols:
+                self._db.execute("ALTER TABLE messages ADD COLUMN sender TEXT")
+                self._db.execute(
+                    "UPDATE messages SET sender = CASE role WHEN 'user' THEN 'client' ELSE 'bot' END"
+                )
+                self._db.commit()
 
     def _migrate_nudge_follow_ups_promised_kind(self) -> None:
         """CREATE TABLE IF NOT EXISTS не меняет CHECK на уже существующей
@@ -338,12 +352,12 @@ class BotStorage:
             self._db.executemany(
                 """
                 INSERT OR IGNORE INTO messages(
-                    chat_id, telegram_message_id, role, content, kind, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    chat_id, telegram_message_id, role, content, kind, created_at, sender
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
-                    (chat_id, message_id, "user", user_text, kind, now),
-                    (chat_id, message_id, "assistant", assistant_text, "text", now),
+                    (chat_id, message_id, "user", user_text, kind, now, "client"),
+                    (chat_id, message_id, "assistant", assistant_text, "text", now, "bot"),
                 ],
             )
             self._db.commit()
@@ -356,28 +370,84 @@ class BotStorage:
             self._db.execute(
                 """
                 INSERT OR IGNORE INTO messages(
-                    chat_id, telegram_message_id, role, content, kind, created_at
-                ) VALUES (?, ?, 'user', ?, ?, ?)
+                    chat_id, telegram_message_id, role, content, kind, created_at, sender
+                ) VALUES (?, ?, 'user', ?, ?, ?, 'client')
                 """,
                 (chat_id, message_id, text, kind, now),
             )
             self._db.commit()
 
-    def add_operator_message(self, chat_id: int, message_id: int, text: str) -> None:
-        """Оператор написал клиенту вручную из CRM — сохраняем как ответ
-        ассистента (клиент видит то же самое сообщение от Smilekit), без
-        парного пользовательского сообщения на этом telegram_message_id."""
+    def add_operator_message(
+        self, chat_id: int, message_id: int, text: str, sender: str = "bot"
+    ) -> None:
+        """Исходящее без парного входящего (проактивные отправки бота и
+        ручные сообщения оператора из CRM). role остаётся 'assistant' —
+        для истории ИИ; кто реально написал, различает sender."""
         now = time.time()
         with self._lock:
             self._db.execute(
                 """
                 INSERT OR IGNORE INTO messages(
-                    chat_id, telegram_message_id, role, content, kind, created_at
-                ) VALUES (?, ?, 'assistant', ?, 'text', ?)
+                    chat_id, telegram_message_id, role, content, kind, created_at, sender
+                ) VALUES (?, ?, 'assistant', ?, 'text', ?, ?)
                 """,
-                (chat_id, message_id, text, now),
+                (chat_id, message_id, text, now, sender),
             )
             self._db.commit()
+
+    def list_chats(self, limit: int = 100) -> list[dict]:
+        """Чаты для раздела «Диалоги» в CRM: последнее сообщение, время,
+        статус паузы."""
+        with self._lock:
+            rows = self._db.execute(
+                """
+                SELECT m.chat_id,
+                       MAX(m.created_at) AS last_at,
+                       (SELECT content FROM messages WHERE chat_id = m.chat_id ORDER BY id DESC LIMIT 1) AS last_text,
+                       (SELECT sender FROM messages WHERE chat_id = m.chat_id ORDER BY id DESC LIMIT 1) AS last_sender,
+                       EXISTS(SELECT 1 FROM paused_chats p WHERE p.chat_id = m.chat_id) AS paused
+                  FROM messages m
+                 GROUP BY m.chat_id
+                 ORDER BY last_at DESC
+                 LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "chatId": row["chat_id"],
+                "lastAt": row["last_at"],
+                "lastText": row["last_text"],
+                "lastSender": row["last_sender"],
+                "paused": bool(row["paused"]),
+            }
+            for row in rows
+        ]
+
+    def chat_messages(self, chat_id: int, limit: int = 300) -> list[dict]:
+        """Переписка одного чата для CRM, старые -> новые."""
+        with self._lock:
+            rows = self._db.execute(
+                """
+                SELECT id, role, content, kind, created_at, sender
+                  FROM messages
+                 WHERE chat_id = ?
+                 ORDER BY id DESC
+                 LIMIT ?
+                """,
+                (chat_id, limit),
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "role": row["role"],
+                "content": row["content"],
+                "kind": row["kind"],
+                "createdAt": row["created_at"],
+                "sender": row["sender"] or ("client" if row["role"] == "user" else "bot"),
+            }
+            for row in reversed(rows)
+        ]
 
     def memory(self, chat_id: int) -> str:
         with self._lock:

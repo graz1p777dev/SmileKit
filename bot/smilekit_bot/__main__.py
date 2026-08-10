@@ -36,6 +36,7 @@ from .outgoing import split_outgoing_messages
 from .sales import (
     classify_objection,
     confirms_order_offer,
+    asks_scam_doubt,
     is_complaint,
     mentions_cooperation_inquiry,
     mentions_vague_future_promise,
@@ -93,6 +94,7 @@ QR_CODE_PATH = Path(__file__).resolve().parent.parent / "assets" / "qrcode.jpeg"
 INSTRUCTIONS_IMAGE_PATH = Path(__file__).resolve().parent.parent / "assets" / "instructia.jpeg"
 EFFECT_PHOTO_PATH = Path(__file__).resolve().parent.parent / "assets" / "results" / "after.jpg"
 FIRST_USE_EFFECT_VOICE_PATH = Path(__file__).resolve().parent.parent / "assets" / "voice" / "first_use_effect.ogg"
+NOT_SCAM_VOICE_PATH = Path(__file__).resolve().parent.parent / "assets" / "voice" / "not_scam.ogg"
 # Дожим по оплате: QR не шлём повторно, только переспрашиваем; после
 # нескольких напоминаний останавливаемся — менеджер разберётся вручную,
 # когда клиент всё же пришлёт чек.
@@ -160,6 +162,8 @@ async def main() -> None:
 
     async def follow_up_after_results(chat_id: int, message_id: int) -> None:
         await asyncio.sleep(3 * 60)
+        if storage.is_paused(chat_id):
+            return  # диалог ведёт менеджер — бот молчит полностью
         if storage.has_message_after(chat_id, message_id):
             return
         if not storage.claim_event(chat_id, "results_follow_up"):
@@ -176,6 +180,8 @@ async def main() -> None:
         на этот простой. claim_event по message_id, а не по chat_id: после
         следующего сообщения клиента новый простой сможет напомнить снова."""
         await asyncio.sleep(IDLE_NUDGE_DELAY_SECONDS)
+        if storage.is_paused(chat_id):
+            return  # диалог ведёт менеджер — бот молчит полностью
         if storage.has_message_after(chat_id, message_id):
             return
         if storage.get_pending_payment(chat_id) is not None:
@@ -198,6 +204,11 @@ async def main() -> None:
             await asyncio.sleep(DAILY_NUDGE_CHECK_INTERVAL_SECONDS)
             now = time.time()
             for chat_id in storage.due_daily_nudges(now, DAILY_NUDGE_MAX_SENDS):
+                if storage.is_paused(chat_id):
+                    # Диалог ведёт менеджер — пропускаем молча, слот считаем
+                    # использованным, чтобы после resume не сыпались старые.
+                    storage.advance_daily_nudge(chat_id, now + DAILY_NUDGE_INTERVAL_SECONDS)
+                    continue
                 try:
                     currency = templates.currency_for_history(
                         [item.content for item in storage.history(chat_id)]
@@ -220,6 +231,8 @@ async def main() -> None:
             await asyncio.sleep(NUDGE_CHECK_INTERVAL_SECONDS)
             now = time.time()
             for _id, chat_id, kind in storage.due_nudge_follow_ups(now):
+                if storage.is_paused(chat_id):
+                    continue  # диалог ведёт менеджер — напоминание сгорает молча
                 try:
                     if kind == "awaiting_payment":
                         pending = storage.get_pending_payment(chat_id)
@@ -480,6 +493,19 @@ async def main() -> None:
             logging.info("Vague future promise, asked to clarify chat=%s message=%s", chat_id, message.message_id)
             storage.log_event(chat_id, "info", "message", "message.vague_promise", "Клиент отложил заказ без даты — уточняем", {"text": text})
             schedule_idle_follow_up(chat_id, None)
+            return
+
+        # Сомнение в честности («вы не мошенники?») — раньше ветки жалоб,
+        # т.к. слова пересекаются. Отвечаем готовым голосовым от владельца.
+        if kind == "text" and asks_scam_doubt(text) and NOT_SCAM_VOICE_PATH.exists():
+            await bot.send_chat_action(chat_id, ChatAction.RECORD_VOICE)
+            await asyncio.sleep(random.uniform(0.9, 1.5))
+            await bot.send_voice(chat_id, FSInputFile(NOT_SCAM_VOICE_PATH))
+            stored = "[голосовое: мы не мошенники, нам можно доверять]"
+            storage.add_exchange(chat_id, message.message_id, text, stored, kind)
+            logging.info("Scam doubt answered with voice chat=%s message=%s", chat_id, message.message_id)
+            storage.log_event(chat_id, "info", "reply", "reply.scam_doubt_voice", "Сомнение в честности — отправлено голосовое", {"text": text})
+            schedule_idle_follow_up(chat_id, promised_hours)
             return
 
         # Явное недовольство — не додумываем причину и не извиняемся вслепую:

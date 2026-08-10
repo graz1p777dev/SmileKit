@@ -254,3 +254,56 @@ def test_log_event_failure_does_not_raise(tmp_path):
     storage.close()
     # После close() запись должна тихо проглотить ошибку, а не уронить бота.
     storage.log_event(1, "info", "reply", "reply.ai_generated", "Ответ отправлен")
+
+
+def test_sender_distinguishes_bot_and_operator(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    storage.add_exchange(1, 10, "Сколько стоит?", "1490 сом", "text")
+    storage.add_operator_message(1, 11, "Напоминание бота")  # sender по умолчанию bot
+    storage.add_operator_message(1, 12, "Здравствуйте, это менеджер", sender="operator")
+
+    messages = storage.chat_messages(1)
+    assert [m["sender"] for m in messages] == ["client", "bot", "bot", "operator"]
+    assert messages[-1]["content"] == "Здравствуйте, это менеджер"
+
+    chats = storage.list_chats()
+    assert len(chats) == 1
+    assert chats[0]["chatId"] == 1
+    assert chats[0]["lastSender"] == "operator"
+    assert chats[0]["paused"] is False
+
+    storage.pause_chat(1, 1000.0, paused_by="operator")
+    assert storage.list_chats()[0]["paused"] is True
+    storage.close()
+
+
+def test_sender_migration_backfills_existing_rows(tmp_path):
+    import sqlite3
+
+    path = str(tmp_path / "bot.db")
+    # База старого формата - без колонки sender.
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            telegram_message_id INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+            content TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            UNIQUE (chat_id, telegram_message_id, role)
+        );
+        INSERT INTO messages (chat_id, telegram_message_id, role, content, kind, created_at)
+        VALUES (5, 1, 'user', 'привет', 'text', 1.0),
+               (5, 1, 'assistant', 'здравствуйте', 'text', 1.0);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    storage = BotStorage(path)
+    messages = storage.chat_messages(5)
+    assert [m["sender"] for m in messages] == ["client", "bot"]
+    storage.close()

@@ -529,6 +529,18 @@ def test_is_complaint_detects_explicit_negativity():
     assert not is_complaint("Как использовать полоски?")
 
 
+def test_asks_scam_doubt_detects_trust_questions():
+    from smilekit_bot.sales import asks_scam_doubt
+
+    assert asks_scam_doubt("Вы не мошенники?")
+    assert asks_scam_doubt("А это точно не обман?")
+    assert asks_scam_doubt("Это не развод?")
+    assert asks_scam_doubt("Вам можно доверять?")
+    assert asks_scam_doubt("Вы меня не кинете?")
+    assert not asks_scam_doubt("Сколько стоит?")
+    assert not asks_scam_doubt("Ужасно, верните деньги")
+
+
 @pytest.mark.asyncio
 async def test_photo_is_sent_as_multimodal_input(tmp_path):
     review = SupervisorResult(status="approved", risk_level="low")

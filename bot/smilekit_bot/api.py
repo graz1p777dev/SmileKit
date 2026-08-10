@@ -218,9 +218,34 @@ async def post_chat_message_handler(request: web.Request) -> web.Response:
     sent = await bot.send_message(chat_id, text)
     storage.cancel_nudge_follow_ups(chat_id)
     storage.pause_chat(chat_id, time.time(), paused_by="operator")
-    storage.add_operator_message(chat_id, sent.message_id, text)
+    storage.add_operator_message(chat_id, sent.message_id, text, sender="operator")
     storage.log_event(chat_id, "info", "operator", "chat.manual_message", "Оператор написал клиенту вручную из CRM")
     return web.json_response({"paused": True})
+
+
+async def get_chats_handler(request: web.Request) -> web.Response:
+    """Список чатов для раздела «Диалоги» CRM."""
+    denied = _require_auth(request)
+    if denied is not None:
+        return denied
+    storage: BotStorage = request.app["storage"]
+    return web.json_response({"chats": storage.list_chats()})
+
+
+async def get_chat_messages_handler(request: web.Request) -> web.Response:
+    """Переписка одного чата: кто написал (client | bot | operator)."""
+    denied = _require_auth(request)
+    if denied is not None:
+        return denied
+    storage: BotStorage = request.app["storage"]
+    try:
+        chat_id = int(request.match_info["chat_id"])
+    except ValueError:
+        return web.json_response({"error": "invalid chat_id"}, status=400)
+    return web.json_response({
+        "messages": storage.chat_messages(chat_id),
+        "paused": storage.is_paused(chat_id),
+    })
 
 
 async def get_events_handler(request: web.Request) -> web.Response:
@@ -307,6 +332,8 @@ def create_app(
     app.router.add_get("/internal/settings", get_settings_handler)
     app.router.add_put("/internal/settings", put_settings_handler)
     app.router.add_post("/internal/lab", post_lab_handler)
+    app.router.add_get("/internal/chats", get_chats_handler)
+    app.router.add_get("/internal/chats/{chat_id}/messages", get_chat_messages_handler)
     app.router.add_get("/internal/chats/{chat_id}/status", get_chat_status_handler)
     app.router.add_post("/internal/chats/{chat_id}/pause", post_chat_pause_handler)
     app.router.add_post("/internal/chats/{chat_id}/resume", post_chat_resume_handler)
