@@ -259,7 +259,7 @@ def is_short_affirmation(text: str) -> bool:
     return bool(_SHORT_AFFIRMATION.match(text.strip()))
 
 
-_ORDER_CTA_MARKERS = ("оформить доставку", "оформить заказ")
+_ORDER_CTA_MARKERS = ("оформить доставку", "оформить заказ", "оформить вам")
 
 
 def confirms_order_offer(text: str, last_assistant_message: str) -> bool:

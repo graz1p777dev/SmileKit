@@ -696,12 +696,12 @@ async def main() -> None:
             await bot.send_voice(chat_id, FSInputFile(FIRST_USE_EFFECT_VOICE_PATH))
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.7, 1.1))
-            await message.answer("Вам оформить доставку?")
+            await message.answer(templates.ORDER_STOCK_CTA)
             stored_reply = "\n\n".join(filter(None, [
                 delivery_text,
                 "[фото до/после]",
                 "[голосовое: эффект после первого применения]",
-                "Вам оформить доставку?",
+                templates.ORDER_STOCK_CTA,
             ]))
             storage.add_exchange(chat_id, message.message_id, text, stored_reply, kind)
             task = asyncio.create_task(follow_up_after_results(chat_id, message.message_id))

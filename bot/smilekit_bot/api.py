@@ -9,8 +9,11 @@
 (отдельный секрет от crm_internal_token — тот идёт в обратную сторону, бот -> CRM).
 """
 
+import base64
+import binascii
 import logging
 import time
+from pathlib import Path
 
 from aiohttp import web
 
@@ -21,6 +24,11 @@ from .service import SmilekitAssistant
 from .storage import BotStorage
 
 LOGGER = logging.getLogger(__name__)
+VOICE_ASSETS = {
+    "first_use_effect.ogg": Path(__file__).resolve().parent.parent / "assets" / "voice" / "first_use_effect.ogg",
+    "not_scam.ogg": Path(__file__).resolve().parent.parent / "assets" / "voice" / "not_scam.ogg",
+}
+MAX_TRANSCRIPTION_BYTES = 20 * 1024 * 1024
 
 MANAGER_PROMPT_KEY = "manager_prompt"
 SUPERVISOR_PROMPT_KEY = "supervisor_prompt"
@@ -94,6 +102,37 @@ def _require_auth(request: web.Request) -> web.Response | None:
 
 async def health(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
+
+
+async def get_voice_asset_handler(request: web.Request) -> web.StreamResponse:
+    path = VOICE_ASSETS.get(request.match_info["name"])
+    if path is None or not path.exists():
+        raise web.HTTPNotFound()
+    return web.FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
+
+
+async def post_transcribe_handler(request: web.Request) -> web.Response:
+    denied = _require_auth(request)
+    if denied is not None:
+        return denied
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid_json"}, status=400)
+    encoded = body.get("audioBase64") if isinstance(body, dict) else None
+    filename = body.get("filename") if isinstance(body, dict) else None
+    if not isinstance(encoded, str) or not isinstance(filename, str):
+        return web.json_response({"error": "audioBase64 and filename are required"}, status=400)
+    try:
+        audio = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error):
+        return web.json_response({"error": "invalid_audio"}, status=400)
+    if not audio or len(audio) > MAX_TRANSCRIPTION_BYTES:
+        return web.json_response({"error": "invalid_audio_size"}, status=400)
+    settings: Settings = request.app["settings"]
+    assistant: SmilekitAssistant = request.app["assistant"]
+    transcript = await assistant.transcribe(audio, filename[:160], settings.transcription_model)
+    return web.json_response({"transcript": transcript})
 
 
 async def get_settings_handler(request: web.Request) -> web.Response:
@@ -329,9 +368,11 @@ def create_app(
     app["assistant"] = assistant
     app["bot"] = bot
     app.router.add_get("/internal/health", health)
+    app.router.add_get("/media/voice/{name}", get_voice_asset_handler)
     app.router.add_get("/internal/settings", get_settings_handler)
     app.router.add_put("/internal/settings", put_settings_handler)
     app.router.add_post("/internal/lab", post_lab_handler)
+    app.router.add_post("/internal/transcribe", post_transcribe_handler)
     app.router.add_get("/internal/chats", get_chats_handler)
     app.router.add_get("/internal/chats/{chat_id}/messages", get_chat_messages_handler)
     app.router.add_get("/internal/chats/{chat_id}/status", get_chat_status_handler)

@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import base64
 from types import SimpleNamespace
 
 import pytest
@@ -223,6 +224,27 @@ async def test_lab_requires_auth(tmp_path):
     async with running_client(tmp_path) as (client, storage, settings):
         resp = await client.post("/internal/lab", json={"message": "Привет"})
         assert resp.status == 403
+
+
+@pytest.mark.asyncio
+async def test_transcribe_accepts_audio_from_internal_client(tmp_path, monkeypatch):
+    async def fake_transcribe(self, audio, filename, model):
+        assert audio == b"voice-bytes"
+        assert filename == "voice.ogg"
+        return "Хочу заказать"
+
+    monkeypatch.setattr(SmilekitAssistant, "transcribe", fake_transcribe)
+    async with running_client(tmp_path) as (client, storage, settings):
+        resp = await client.post(
+            "/internal/transcribe",
+            headers={"x-internal-token": TOKEN},
+            json={
+                "audioBase64": base64.b64encode(b"voice-bytes").decode("ascii"),
+                "filename": "voice.ogg",
+            },
+        )
+        assert resp.status == 200
+        assert (await resp.json()) == {"transcript": "Хочу заказать"}
 
 
 @pytest.mark.asyncio

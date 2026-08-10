@@ -475,6 +475,7 @@ def test_confirms_order_offer_only_when_last_bot_message_offered_order():
     assert confirms_order_offer("давайте", "Вам оформить доставку?")
     assert confirms_order_offer("Да!", "Отлично, вам оформить заказ?")
     assert confirms_order_offer("Да давайте", "Вам оформить доставку?")
+    assert confirms_order_offer("Да", "Оформить вам? Пока есть в наличии.")
     assert confirms_order_offer(
         "да, давайте",
         "Отлично! 😊 Тогда доставка по Бишкеку займёт примерно 30 минут.\n\n"
