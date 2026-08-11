@@ -332,6 +332,23 @@ async def test_chat_message_sends_and_pauses(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_chat_broadcast_sends_without_pausing(tmp_path):
+    bot = FakeBot()
+    async with running_client(tmp_path, bot=bot) as (client, storage, settings):
+        resp = await client.post(
+            "/internal/chats/42/broadcast",
+            headers={"x-internal-token": TOKEN},
+            json={"text": "Только сегодня скидка"},
+        )
+        assert resp.status == 200
+        assert (await resp.json()) == {"sent": True}
+        assert bot.sent == [(42, "Только сегодня скидка")]
+        assert not storage.is_paused(42)
+        history = storage.history(42)
+        assert history[-1].content == "Только сегодня скидка"
+
+
+@pytest.mark.asyncio
 async def test_chat_message_without_bot_returns_503(tmp_path):
     async with running_client(tmp_path) as (client, storage, settings):
         resp = await client.post(

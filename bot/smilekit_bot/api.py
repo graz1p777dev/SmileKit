@@ -273,6 +273,32 @@ async def post_chat_message_handler(request: web.Request) -> web.Response:
     return web.json_response({"paused": True})
 
 
+async def post_chat_broadcast_handler(request: web.Request) -> web.Response:
+    """Системная рассылка из CRM: отправляет текст, но не ставит чат на паузу."""
+    denied = _require_auth(request)
+    if denied is not None:
+        return denied
+    bot = request.app.get("bot")
+    if bot is None:
+        return web.json_response({"error": "bot_unavailable"}, status=503)
+    storage: BotStorage = request.app["storage"]
+    try:
+        chat_id = int(request.match_info["chat_id"])
+        body = await request.json()
+    except ValueError:
+        return web.json_response({"error": "invalid chat_id"}, status=400)
+    except Exception:
+        return web.json_response({"error": "invalid_json"}, status=400)
+    text = body.get("text") if isinstance(body, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        return web.json_response({"error": "text is required"}, status=400)
+    value = text.strip()[:4000]
+    sent = await bot.send_message(chat_id, value)
+    storage.add_operator_message(chat_id, sent.message_id, value, sender="bot")
+    storage.log_event(chat_id, "info", "campaign", "campaign.message_sent", "Отправлена рассылка из CRM")
+    return web.json_response({"sent": True})
+
+
 async def get_chats_handler(request: web.Request) -> web.Response:
     """Список чатов для раздела «Диалоги» CRM."""
     denied = _require_auth(request)
@@ -391,5 +417,6 @@ def create_app(
     app.router.add_post("/internal/chats/{chat_id}/pause", post_chat_pause_handler)
     app.router.add_post("/internal/chats/{chat_id}/resume", post_chat_resume_handler)
     app.router.add_post("/internal/chats/{chat_id}/message", post_chat_message_handler)
+    app.router.add_post("/internal/chats/{chat_id}/broadcast", post_chat_broadcast_handler)
     app.router.add_get("/internal/events", get_events_handler)
     return app
