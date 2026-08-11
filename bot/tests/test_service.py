@@ -382,6 +382,7 @@ def test_confirms_review_offer_only_after_bot_offered_reviews():
 
 def test_city_after_price_triggers_results_only_for_sales_funnel():
     assert should_send_results_after_city("Я с Бишкека", ["Сколько стоит?", "1490 сом"])
+    assert should_send_results_after_city("Манас", ["Сколько стоит?", "1490 сом"])
     assert not should_send_results_after_city("Я с Бишкека", ["Как использовать?"])
     assert not should_send_results_after_city("У меня боль, я в Бишкеке", ["1490 сом"])
 

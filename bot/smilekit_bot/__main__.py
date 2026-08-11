@@ -2,6 +2,7 @@ import asyncio
 import base64
 import logging
 import random
+import re
 import time
 from collections import defaultdict
 from io import BytesIO
@@ -603,18 +604,45 @@ async def main() -> None:
                 schedule_idle_follow_up(chat_id, promised_hours)
                 return
 
-        # Первый контакт — готовый сценарий без обращения к ИИ вообще:
-        # экономия полного цикла черновик+проверка на каждый новый диалог.
-        # Не важно, чем клиент написал первым — текстом, фото или голосовым.
+        normalized_text = " ".join(text.lower().split())
+        is_link_message = bool(re.search(r"(?:https?://|www\.)\S+", text, re.IGNORECASE))
+        is_greeting_message = bool(re.fullmatch(
+            r"\s*(?:улыбка|здравствуйте|здравствуй|привет|добрый\s+(?:день|вечер|утро))[!,.?\s😊👋]*",
+            text,
+            re.IGNORECASE,
+        ))
+        is_price_message = any(marker in normalized_text for marker in ("сколько стоит", "какая цена", "цена?"))
+
+        # Рекламная ссылка и слово «Улыбка» — это только вход в диалог. Не
+        # обсуждаем содержимое ссылки и не спрашиваем город.
+        if kind == "text" and (is_link_message or is_greeting_message):
+            await message.answer(templates.GREETING)
+            storage.add_exchange(chat_id, message.message_id, text, templates.GREETING, kind)
+            return
+
+        # Цена и эффект отправляются отдельными пузырями. Город спрашиваем
+        # только тогда, когда клиент сам переходит к вопросу о доставке.
+        if kind == "text" and is_price_message:
+            replies = ([templates.GREETING] if is_new_conversation else []) + [
+                templates.PRODUCT_INFO,
+                templates.PRODUCT_EFFECT,
+            ]
+            for index, reply_text in enumerate(replies):
+                if index:
+                    await bot.send_chat_action(chat_id, ChatAction.TYPING)
+                    await asyncio.sleep(random.uniform(0.6, 1.0))
+                await message.answer(reply_text)
+            storage.add_exchange(chat_id, message.message_id, text, "\n\n".join(replies), kind)
+            return
+
+        # Первый контакт — только обычное приветствие, без продажи и вопроса
+        # «вы в Бишкеке?». Дальше отвечаем на фактический вопрос клиента.
         if is_new_conversation:
-            await message.answer(templates.PRODUCT_INFO)
-            await bot.send_chat_action(chat_id, ChatAction.TYPING)
-            await asyncio.sleep(random.uniform(0.6, 1.0))
-            await message.answer(templates.CITY_QUESTION)
+            await message.answer(templates.GREETING)
             storage.add_exchange(
                 chat_id, message.message_id,
                 f"[{kind}] {text}" if kind != "text" else text,
-                f"{templates.PRODUCT_INFO}\n\n{templates.CITY_QUESTION}", kind,
+                templates.GREETING, kind,
             )
             storage.schedule_daily_nudge(chat_id, time.time() + DAILY_NUDGE_INTERVAL_SECONDS)
             task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
@@ -784,13 +812,10 @@ async def main() -> None:
                 return
             chat_id = message.chat.id
             storage.clear_chat(chat_id)
-            await message.answer(templates.PRODUCT_INFO)
-            await bot.send_chat_action(chat_id, ChatAction.TYPING)
-            await asyncio.sleep(random.uniform(0.6, 1.0))
-            await message.answer(templates.CITY_QUESTION)
+            await message.answer(templates.GREETING)
             storage.add_exchange(
                 chat_id, message.message_id, "/start",
-                f"{templates.PRODUCT_INFO}\n\n{templates.CITY_QUESTION}", "command",
+                templates.GREETING, "command",
             )
             storage.schedule_daily_nudge(chat_id, time.time() + DAILY_NUDGE_INTERVAL_SECONDS)
             task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
