@@ -692,7 +692,10 @@ async def main() -> None:
             # Клиент мог написать город и заодно ещё что-то спросить в том же
             # сообщении — сперва полноценный ответ ИИ на этот вопрос, потом
             # тот же готовый хвост (доставка, результаты, эффект, CTA).
-            if "?" in text:
+            # Неизвестный городу/стране тоже отвечает Luna — фиксированный
+            # список нужен только для быстрых готовых сроков доставки.
+            delivery_text = templates.delivery_template_for_city(text)
+            if "?" in text or not delivery_text:
                 reply = await assistant.reply(
                     text, history,
                     customer_memory=memory,
@@ -712,7 +715,6 @@ async def main() -> None:
 
             # Сперва прямой ответ на то, что подразумевает названный город
             # (доставка), и только потом результаты — не наоборот.
-            delivery_text = templates.delivery_template_for_city(text)
             if delivery_text:
                 await message.answer(delivery_text)
                 await bot.send_chat_action(chat_id, ChatAction.TYPING)

@@ -87,7 +87,16 @@ def should_send_results_after_city(text: str, history: list[str]) -> bool:
         return False
     has_city = any(marker in normalized for marker in _CITY_MARKERS)
     prior_text = " ".join(item.lower() for item in history)
-    return has_city and any(marker in prior_text for marker in _PRICE_MARKERS)
+    prior_price = any(marker in prior_text for marker in _PRICE_MARKERS)
+    asked_for_city = "из какого вы города" in prior_text or "вы в бишкеке" in prior_text
+    short_location_answer = "?" not in normalized and len(normalized.split()) <= 5
+    delivery_question = any(marker in normalized for marker in ("достав", "жеткир", "отправ", "привез"))
+    # Частые города обрабатываются готовыми шаблонами выше, но неизвестный
+    # город/страна не должны блокировать сценарий: ответ о доставке сформирует
+    # GPT-5.6 Luna, а фото результатов всё равно отправятся после него.
+    return prior_price and (
+        has_city or delivery_question or (asked_for_city and short_location_answer)
+    )
 
 
 def result_photo_group() -> list[InputMediaPhoto]:
