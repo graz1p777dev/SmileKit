@@ -36,3 +36,11 @@ def test_daily_discount_offer_uses_matching_price_line():
     assert "155000 сум" in templates.daily_discount_offer("UZS")
     assert "7000 тенге" in templates.daily_discount_offer("KZT")
     assert "скидку 13%" in templates.daily_discount_offer()
+
+
+def test_result_claim_uses_approved_wording() -> None:
+    approved = "Гарантированно увидите эффект с первого раза."
+
+    assert templates.GREETING_MESSAGES[1] == approved
+    assert templates.PRODUCT_EFFECT == approved
+    assert "заметно" not in templates.GREETING.lower()
