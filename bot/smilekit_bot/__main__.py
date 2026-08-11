@@ -8,7 +8,7 @@ from io import BytesIO
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.enums import ChatAction
+from aiogram.enums import ChatAction, ChatMemberStatus, ChatType
 from aiogram.filters import Command, CommandStart
 from aiogram.types import FSInputFile, Message
 from aiohttp import web
@@ -39,6 +39,7 @@ from .sales import (
     asks_scam_doubt,
     is_complaint,
     mentions_cooperation_inquiry,
+    is_greeting_only,
     mentions_vague_future_promise,
     promised_calendar_date_hours,
     promised_clock_time_hours,
@@ -73,6 +74,7 @@ ROUTED_TEMPLATES = {
     "offline_store_question": templates.OFFLINE_STORE_COD_REPLY,
     "delivery_address_question": templates.ADDRESS_COD_REPLY,
 }
+DELIVERY_GROUP_SETTING_KEY = "delivery_group_chat_id"
 # Клиент часто пишет мыслями через несколько сообщений подряд (видно на
 # живых чатах). Без этого окна каждое такое сообщение уходило в отдельный
 # независимый вызов AI, и клиенту прилетало по несколько ответов подряд.
@@ -321,6 +323,7 @@ async def main() -> None:
                 customer_name=payload.get("customerName"),
                 customer_phone=payload.get("customerPhone"),
                 city=payload.get("city"),
+                address=payload.get("address"),
             )
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.6, 1.0))
@@ -348,27 +351,46 @@ async def main() -> None:
     async def push_to_delivery_group(payment: dict, receipt_file_id: str, receipt_kind: str = "image") -> None:
         """Пересылает оплаченный заказ доставщикам вместе с чеком клиента.
 
-        Группа доставки (WhatsApp) ещё не готова — заглушка: без
-        DELIVERY_GROUP_CHAT_ID просто логирует детали заказа, ничего не
-        теряя, пока канал не подключат.
+        Группа регистрируется администратором командой /delivery_group.
+        Без неё заказ остаётся в журнале и не отправляется в случайный чат.
         """
+        order_summary = str(payment.get("order_summary") or "—")[:350]
         caption = (
             f"Новый оплаченный заказ 📦\n"
             f"Имя: {payment.get('customer_name') or '—'}\n"
             f"Телефон: {payment.get('customer_phone') or '—'}\n"
-            f"Город/адрес: {payment.get('city') or '—'}\n"
-            f"Что взял: {payment.get('order_summary') or '—'}\n"
+            f"Город: {payment.get('city') or '—'}\n"
+            f"Адрес: {payment.get('address') or '—'}\n"
+            f"Что взял: {order_summary}\n"
             f"Сумма: {payment.get('amount')} {payment.get('currency') or ''}"
         )
-        if settings.delivery_group_chat_id:
-            if receipt_kind == "pdf":
-                await bot.send_document(settings.delivery_group_chat_id, receipt_file_id, caption=caption)
-            else:
-                await bot.send_photo(settings.delivery_group_chat_id, receipt_file_id, caption=caption)
-        else:
+        saved_group_id = storage.get_bot_setting(DELIVERY_GROUP_SETTING_KEY)
+        try:
+            group_chat_id = int(saved_group_id) if saved_group_id else settings.delivery_group_chat_id
+        except ValueError:
+            group_chat_id = settings.delivery_group_chat_id
+        if not group_chat_id:
             logging.warning(
                 "Delivery group not configured yet (DELIVERY_GROUP_CHAT_ID=0). Order details:\n%s",
                 caption,
+            )
+            return
+        try:
+            if receipt_kind == "pdf":
+                await bot.send_document(group_chat_id, receipt_file_id, caption=caption)
+            else:
+                await bot.send_photo(group_chat_id, receipt_file_id, caption=caption)
+            storage.log_event(
+                payment.get("chat_id"), "info", "order", "order.sent_to_delivery_group",
+                "Оплаченный заказ и чек отправлены в группу доставки",
+                {"deliveryGroupChatId": group_chat_id},
+            )
+        except Exception:
+            logging.exception("Failed to send paid order to delivery group chat=%s", group_chat_id)
+            storage.log_event(
+                payment.get("chat_id"), "error", "order", "order.delivery_group_failed",
+                "Не удалось отправить оплаченный заказ в группу доставки",
+                {"deliveryGroupChatId": group_chat_id},
             )
 
     def push_deal(message: Message, *, is_new_conversation: bool) -> None:
@@ -508,6 +530,21 @@ async def main() -> None:
             schedule_idle_follow_up(chat_id, promised_hours)
             return
 
+        # Повторное приветствие старого клиента не перезапускает первую
+        # воронку и не повторяет цену/город — просто продолжаем диалог.
+        if kind == "text" and not is_new_conversation and is_greeting_only(text):
+            normalized_greeting = text.lower()
+            variants = (
+                templates.RETURNING_KYRGYZ_GREETING_REPLIES
+                if "салам" in normalized_greeting
+                else templates.RETURNING_GREETING_REPLIES
+            )
+            reply_text = random.choice(variants)
+            await message.answer(reply_text)
+            storage.add_exchange(chat_id, message.message_id, text, reply_text, kind)
+            schedule_idle_follow_up(chat_id, promised_hours)
+            return
+
         # Явное недовольство — не додумываем причину и не извиняемся вслепую:
         # прямо спрашиваем, что случилось, шлём важное уведомление в CRM и
         # переносим сделку в «Нестандартный запрос» — разбирает человек.
@@ -573,9 +610,10 @@ async def main() -> None:
                 order_summary="Клиент подтвердил заказ / запросил реквизиты оплаты",
                 amount=default_amount,
                 currency="KGS",
-                customer_name=None,
+                customer_name=(message.from_user.full_name if message.from_user else None),
                 customer_phone=None,
                 city=None,
+                address=None,
             )
             if QR_CODE_PATH.exists():
                 await bot.send_photo(chat_id, FSInputFile(QR_CODE_PATH))
@@ -756,6 +794,21 @@ async def main() -> None:
             reply.supervisor.customer_memory,
             reply.supervisor.order_summary,
         )
+        pending_payment = storage.get_pending_payment(chat_id)
+        if pending_payment is not None:
+            author = message.from_user
+            storage.update_pending_payment_details(
+                chat_id,
+                order_summary=reply.supervisor.order_summary,
+                customer_name=(
+                    reply.supervisor.order.customer_name
+                    or pending_payment.get("customer_name")
+                    or (author.full_name if author else None)
+                ),
+                customer_phone=reply.supervisor.order.contact_phone,
+                city=reply.supervisor.order.city,
+                address=reply.supervisor.order.address,
+            )
         task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
         follow_up_tasks.add(task)
         task.add_done_callback(follow_up_tasks.discard)
@@ -806,6 +859,24 @@ async def main() -> None:
             storage.clear_chat(message.chat.id)
             await message.answer("Диалог и сохранённая память очищены.")
 
+    @dp.message(Command("delivery_group"))
+    async def configure_delivery_group(message: Message) -> None:
+        if message.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+            await message.answer("Эту команду нужно отправить в группе доставки.")
+            return
+        if message.from_user is None:
+            return
+        member = await bot.get_chat_member(message.chat.id, message.from_user.id)
+        if member.status not in {ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR}:
+            await message.answer("Подключить группу может только её администратор.")
+            return
+        storage.set_bot_setting(DELIVERY_GROUP_SETTING_KEY, str(message.chat.id))
+        await message.answer(
+            "Группа доставки подключена ✅\n"
+            "После подтверждения оплаты сюда будут приходить данные клиента и чек."
+        )
+        logging.info("Delivery group configured chat=%s by=%s", message.chat.id, message.from_user.id)
+
     async def handle_receipt_file(
         message: Message, pending: dict, *, file_id: str, file_bytes: bytes, kind: str
     ) -> None:
@@ -841,7 +912,7 @@ async def main() -> None:
             task.add_done_callback(crm_tasks.discard)
             storage.log_event(chat_id, "info", "order", "order.receipt_verified", "Чек прошёл проверку, заказ подтверждён")
         else:
-            await message.answer(templates.RECEIPT_MISMATCH)
+            await message.answer(templates.receipt_mismatch_reply(result))
             storage.schedule_awaiting_payment_reminder(
                 chat_id, time.time() + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
             )

@@ -163,6 +163,8 @@ _SUPERVISOR_JSON_HINT = """
     "total_amount": число или null,
     "currency": "строка" или null,
     "city": "строка" или null,
+    "address": "строка" или null,
+    "customer_name": "строка" или null,
     "contact_phone": "строка" или null,
     "contact_username": "строка" или null
   }
@@ -202,6 +204,8 @@ def _restore_supervisor_pii(result: SupervisorResult, mapping: dict[str, str]) -
     result.issues = [restore_mapping(issue, mapping) or issue for issue in result.issues]
     result.order.contact_phone = restore_mapping(result.order.contact_phone, mapping)
     result.order.city = restore_mapping(result.order.city, mapping)
+    result.order.address = restore_mapping(result.order.address, mapping)
+    result.order.customer_name = restore_mapping(result.order.customer_name, mapping)
     return result
 
 

@@ -526,6 +526,14 @@ def test_wants_payment_info_detects_requisites_questions():
     assert not wants_payment_info("Сколько стоит?")
 
 
+def test_returning_customer_greeting_is_detected_without_restarting_sales_flow():
+    from smilekit_bot.sales import is_greeting_only
+
+    assert is_greeting_only("Здравствуйте")
+    assert is_greeting_only("Салам! 😊")
+    assert not is_greeting_only("Здравствуйте, сколько стоит?")
+
+
 def test_is_complaint_detects_explicit_negativity():
     from smilekit_bot.sales import is_complaint
 

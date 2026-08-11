@@ -25,6 +25,8 @@ class OrderDetails(BaseModel):
     total_amount: float | None = None
     currency: str | None = None
     city: str | None = None
+    address: str | None = None
+    customer_name: str | None = None
     contact_phone: str | None = None
     contact_username: str | None = None
 

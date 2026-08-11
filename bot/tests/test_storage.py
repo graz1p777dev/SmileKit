@@ -34,6 +34,37 @@ def test_history_and_memory_are_persistent(tmp_path):
     reopened.close()
 
 
+def test_pending_payment_collects_delivery_details_after_qr(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    storage.save_pending_payment(
+        42,
+        order_summary="1 коробка",
+        amount=1490,
+        currency="KGS",
+        customer_name=None,
+        customer_phone=None,
+        city="Бишкек",
+        address=None,
+    )
+
+    storage.update_pending_payment_details(
+        42,
+        order_summary=None,
+        customer_name="Алихан",
+        customer_phone="+996 500 000 000",
+        city=None,
+        address="ул. Манаса, 10",
+    )
+
+    payment = storage.get_pending_payment(42)
+    assert payment is not None
+    assert payment["customer_name"] == "Алихан"
+    assert payment["customer_phone"] == "+996 500 000 000"
+    assert payment["city"] == "Бишкек"
+    assert payment["address"] == "ул. Манаса, 10"
+    storage.close()
+
+
 def test_rate_limit_blocks_extra_messages(tmp_path):
     storage = BotStorage(str(tmp_path / "bot.db"))
     assert storage.allow_request(1, limit=2)

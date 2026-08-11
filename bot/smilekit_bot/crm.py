@@ -133,7 +133,7 @@ def build_order_payload(
     return {
         "externalKey": f"telegram:{chat_id}:order:{order_fingerprint(order)}",
         "source": "telegram_bot",
-        "customerName": _text(customer_name),
+        "customerName": _text(order.customer_name) or _text(customer_name),
         "customerPhone": phone,
         "customerUsername": username.lstrip("@") if username else None,
         "telegramChatId": chat_id,
@@ -141,6 +141,7 @@ def build_order_payload(
         "totalAmount": _amount(order.total_amount),
         "currency": _currency(order.currency),
         "city": _text(order.city, 120),
+        "address": _text(order.address, 500),
         "summary": summary,
     }
 

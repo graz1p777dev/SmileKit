@@ -240,6 +240,16 @@ _COOPERATION_MARKERS = re.compile(
     re.IGNORECASE,
 )
 
+_GREETING_ONLY = re.compile(
+    r"^\s*(?:здравствуйте|здравствуй|привет|добрый\s+(?:день|вечер|утро)|"
+    r"салам|ассаламу\s+алейкум)[!,.?\s😊👋]*$",
+    re.IGNORECASE,
+)
+
+
+def is_greeting_only(text: str) -> bool:
+    return bool(_GREETING_ONLY.fullmatch(text))
+
 
 def mentions_cooperation_inquiry(text: str) -> bool:
     """Опт/партнёрство/реклама — не обычный розничный покупатель, такой

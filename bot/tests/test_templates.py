@@ -46,3 +46,15 @@ def test_initial_script_matches_old_sales_flow() -> None:
         "💰 ЦЕНА — 1490 СОМ.🇰🇬"
     )
     assert templates.CITY_QUESTION == "Подскажите, пожалуйста, из какого вы города?"
+
+
+def test_old_receipt_gets_specific_date_message() -> None:
+    reply = templates.receipt_mismatch_reply({
+        "is_real_receipt_screenshot": True,
+        "amount_ok": True,
+        "recipient_ok": True,
+        "date_ok": False,
+    })
+
+    assert "сумма и получатель" in reply.lower()
+    assert "дата чека не сегодняшняя" in reply.lower()

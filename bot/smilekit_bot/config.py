@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # та, что уже сконфигурирована в openai_model.
     bot_allowed_models: str = ""
     # Telegram-группа доставщиков, куда бот шлёт оплаченный заказ с чеком.
-    # 0 = заглушка: группа ещё не создана, детали заказа только в логах.
+    # 0 = группа регистрируется администратором командой /delivery_group.
     delivery_group_chat_id: int = 0
 
     model_config = SettingsConfigDict(

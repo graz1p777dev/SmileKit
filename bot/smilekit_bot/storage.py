@@ -88,6 +88,7 @@ class BotStorage:
                     customer_name TEXT,
                     customer_phone TEXT,
                     city TEXT,
+                    address TEXT,
                     reminder_count INTEGER NOT NULL DEFAULT 0,
                     created_at REAL NOT NULL
                 );
@@ -112,6 +113,14 @@ class BotStorage:
             self._db.commit()
             self._migrate_nudge_follow_ups_promised_kind()
             self._migrate_messages_sender()
+            self._migrate_pending_payments_address()
+
+    def _migrate_pending_payments_address(self) -> None:
+        with self._lock:
+            cols = [row["name"] for row in self._db.execute("PRAGMA table_info(pending_payments)")]
+            if "address" not in cols:
+                self._db.execute("ALTER TABLE pending_payments ADD COLUMN address TEXT")
+                self._db.commit()
 
     def _migrate_messages_sender(self) -> None:
         """sender различает автора исходящего: bot | operator (role остаётся
@@ -626,13 +635,14 @@ class BotStorage:
         customer_name: str | None,
         customer_phone: str | None,
         city: str | None,
+        address: str | None,
     ) -> None:
         with self._lock:
             self._db.execute(
                 """
                 INSERT INTO pending_payments
-                    (chat_id, order_summary, amount, currency, customer_name, customer_phone, city, reminder_count, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+                    (chat_id, order_summary, amount, currency, customer_name, customer_phone, city, address, reminder_count, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
                 ON CONFLICT(chat_id) DO UPDATE SET
                     order_summary = excluded.order_summary,
                     amount = excluded.amount,
@@ -640,10 +650,37 @@ class BotStorage:
                     customer_name = excluded.customer_name,
                     customer_phone = excluded.customer_phone,
                     city = excluded.city,
+                    address = excluded.address,
                     reminder_count = 0,
                     created_at = excluded.created_at
                 """,
-                (chat_id, order_summary, amount, currency, customer_name, customer_phone, city, time.time()),
+                (chat_id, order_summary, amount, currency, customer_name, customer_phone, city, address, time.time()),
+            )
+            self._db.commit()
+
+    def update_pending_payment_details(
+        self,
+        chat_id: int,
+        *,
+        order_summary: str | None,
+        customer_name: str | None,
+        customer_phone: str | None,
+        city: str | None,
+        address: str | None,
+    ) -> None:
+        """Дополняет заказ данными, которые клиент прислал после получения QR."""
+        with self._lock:
+            self._db.execute(
+                """
+                UPDATE pending_payments SET
+                    order_summary = COALESCE(NULLIF(?, ''), order_summary),
+                    customer_name = COALESCE(NULLIF(?, ''), customer_name),
+                    customer_phone = COALESCE(NULLIF(?, ''), customer_phone),
+                    city = COALESCE(NULLIF(?, ''), city),
+                    address = COALESCE(NULLIF(?, ''), address)
+                WHERE chat_id = ?
+                """,
+                (order_summary, customer_name, customer_phone, city, address, chat_id),
             )
             self._db.commit()
 
