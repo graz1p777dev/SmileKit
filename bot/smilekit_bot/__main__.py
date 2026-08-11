@@ -2,7 +2,6 @@ import asyncio
 import base64
 import logging
 import random
-import re
 import time
 from collections import defaultdict
 from io import BytesIO
@@ -604,54 +603,17 @@ async def main() -> None:
                 schedule_idle_follow_up(chat_id, promised_hours)
                 return
 
-        normalized_text = " ".join(text.lower().split())
-        is_link_message = bool(re.search(r"(?:https?://|www\.)\S+", text, re.IGNORECASE))
-        is_greeting_message = bool(re.fullmatch(
-            r"\s*(?:улыбка|здравствуйте|здравствуй|привет|добрый\s+(?:день|вечер|утро))[!,.?\s😊👋]*",
-            text,
-            re.IGNORECASE,
-        ))
-        is_price_message = any(marker in normalized_text for marker in ("сколько стоит", "какая цена", "цена?"))
-
-        # Рекламная ссылка и слово «Улыбка» — это только вход в диалог. Не
-        # обсуждаем содержимое ссылки и не спрашиваем город.
-        if kind == "text" and (is_link_message or is_greeting_message):
-            for index, reply_text in enumerate(templates.GREETING_MESSAGES):
-                if index:
-                    await bot.send_chat_action(chat_id, ChatAction.TYPING)
-                    await asyncio.sleep(random.uniform(0.6, 1.0))
-                await message.answer(reply_text)
-            storage.add_exchange(chat_id, message.message_id, text, templates.GREETING, kind)
-            return
-
-        # Цена и эффект отправляются отдельными пузырями. Город спрашиваем
-        # только тогда, когда клиент сам переходит к вопросу о доставке.
-        if kind == "text" and is_price_message:
-            replies = (
-                list(templates.GREETING_MESSAGES)
-                if is_new_conversation
-                else [templates.PRODUCT_INFO, templates.PRODUCT_EFFECT]
-            )
-            for index, reply_text in enumerate(replies):
-                if index:
-                    await bot.send_chat_action(chat_id, ChatAction.TYPING)
-                    await asyncio.sleep(random.uniform(0.6, 1.0))
-                await message.answer(reply_text)
-            storage.add_exchange(chat_id, message.message_id, text, "\n\n".join(replies), kind)
-            return
-
-        # Первый контакт — утверждённый шаблон SmileKit отдельными сообщениями,
-        # без вопроса «вы в Бишкеке?». Дальше отвечаем по сценарию клиента.
+        # Первый контакт — старый готовый сценарий из утверждённого скрипта:
+        # информация о товаре и затем отдельный вопрос о городе.
         if is_new_conversation:
-            for index, reply_text in enumerate(templates.GREETING_MESSAGES):
-                if index:
-                    await bot.send_chat_action(chat_id, ChatAction.TYPING)
-                    await asyncio.sleep(random.uniform(0.6, 1.0))
-                await message.answer(reply_text)
+            await message.answer(templates.PRODUCT_INFO)
+            await bot.send_chat_action(chat_id, ChatAction.TYPING)
+            await asyncio.sleep(random.uniform(0.6, 1.0))
+            await message.answer(templates.CITY_QUESTION)
             storage.add_exchange(
                 chat_id, message.message_id,
                 f"[{kind}] {text}" if kind != "text" else text,
-                templates.GREETING, kind,
+                f"{templates.PRODUCT_INFO}\n\n{templates.CITY_QUESTION}", kind,
             )
             storage.schedule_daily_nudge(chat_id, time.time() + DAILY_NUDGE_INTERVAL_SECONDS)
             task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
@@ -823,14 +785,13 @@ async def main() -> None:
                 return
             chat_id = message.chat.id
             storage.clear_chat(chat_id)
-            for index, reply_text in enumerate(templates.GREETING_MESSAGES):
-                if index:
-                    await bot.send_chat_action(chat_id, ChatAction.TYPING)
-                    await asyncio.sleep(random.uniform(0.6, 1.0))
-                await message.answer(reply_text)
+            await message.answer(templates.PRODUCT_INFO)
+            await bot.send_chat_action(chat_id, ChatAction.TYPING)
+            await asyncio.sleep(random.uniform(0.6, 1.0))
+            await message.answer(templates.CITY_QUESTION)
             storage.add_exchange(
                 chat_id, message.message_id, "/start",
-                templates.GREETING, "command",
+                f"{templates.PRODUCT_INFO}\n\n{templates.CITY_QUESTION}", "command",
             )
             storage.schedule_daily_nudge(chat_id, time.time() + DAILY_NUDGE_INTERVAL_SECONDS)
             task = asyncio.create_task(idle_nudge(chat_id, message.message_id))

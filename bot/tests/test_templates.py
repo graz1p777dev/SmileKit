@@ -38,9 +38,11 @@ def test_daily_discount_offer_uses_matching_price_line():
     assert "скидку 13%" in templates.daily_discount_offer()
 
 
-def test_result_claim_uses_approved_wording() -> None:
-    approved = "Гарантированно увидите эффект с первого раза."
-
-    assert templates.GREETING_MESSAGES[1] == approved
-    assert templates.PRODUCT_EFFECT == approved
-    assert "заметно" not in templates.GREETING.lower()
+def test_initial_script_matches_old_sales_flow() -> None:
+    assert templates.PRODUCT_INFO == (
+        "Здравствуйте! 😊\n\n"
+        "SmileKit помогает заметно отбелить зубы уже после первого применения.\n\n"
+        "📦 В наборе 14 отбеливающих полосок — это полный курс.\n\n"
+        "💰 ЦЕНА — 1490 СОМ.🇰🇬"
+    )
+    assert templates.CITY_QUESTION == "Подскажите, пожалуйста, из какого вы города?"
