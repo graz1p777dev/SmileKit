@@ -1,4 +1,9 @@
-from smilekit_bot.privacy import apply_mapping, build_mapping, restore_mapping
+from smilekit_bot.privacy import (
+    apply_mapping,
+    build_mapping,
+    extract_delivery_details,
+    restore_mapping,
+)
 
 
 def test_build_mapping_detects_phone_and_assigns_placeholder():
@@ -42,3 +47,15 @@ def test_no_pii_leaves_text_unchanged():
 def test_restore_handles_missing_placeholder_gracefully():
     assert restore_mapping(None, {"x": "{{PHONE_1}}"}) is None
     assert restore_mapping("текст без плейсхолдеров", {}) == "текст без плейсхолдеров"
+
+
+def test_receipt_caption_extracts_phone_address_and_city_from_history():
+    phone, address, city = extract_delivery_details(
+        "0500896899\nчатыркульский переулок 65/a",
+        "Подскажите, пожалуйста, из какого вы города?",
+        "Бишкек",
+    )
+
+    assert phone == "0500896899"
+    assert address == "чатыркульский переулок 65/a"
+    assert city == "Бишкек"

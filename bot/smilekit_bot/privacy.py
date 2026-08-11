@@ -20,6 +20,10 @@ _ADDRESS_RE = re.compile(
     r"[^\n,;.!?]{2,60}",
     re.IGNORECASE,
 )
+_ADDRESS_LINE_RE = re.compile(
+    r"(?im)^[^\n]*(?:ул\.?|улица|мкр\.?|микрорайон|пер\.?|переулок|проспект|просп\.?)"
+    r"[^\n]*$"
+)
 # Клиент сам представляется — берём только имя после явного вводного слова,
 # чтобы не путать с обычными капитализированными словами в начале фразы.
 _NAME_RE = re.compile(
@@ -28,6 +32,26 @@ _NAME_RE = re.compile(
 )
 
 _KINDS = (("PHONE", _PHONE_RE), ("ADDRESS", _ADDRESS_RE), ("NAME", _NAME_RE))
+
+_CITY_NAMES = (
+    ("бишкек", "Бишкек"), ("токмок", "Токмок"), ("ош", "Ош"),
+    ("джалал-абад", "Джалал-Абад"), ("джалалабад", "Джалал-Абад"),
+    ("манас", "Манас"), ("каракол", "Каракол"), ("нарын", "Нарын"),
+    ("талас", "Талас"), ("баткен", "Баткен"), ("алмат", "Алматы"),
+    ("астан", "Астана"), ("ташкент", "Ташкент"), ("москв", "Москва"),
+)
+
+
+def extract_delivery_details(text: str, *history: str) -> tuple[str | None, str | None, str | None]:
+    """Достаёт телефон/адрес из подписи чека и город из текущего диалога."""
+    value = text or ""
+    phone_match = _PHONE_RE.search(value)
+    address_match = _ADDRESS_LINE_RE.search(value)
+    phone = phone_match.group(0).strip() if phone_match else None
+    address = address_match.group(0).strip(" \t,;.") if address_match else None
+    combined = "\n".join((value, *history)).casefold()
+    city = next((name for marker, name in _CITY_NAMES if marker in combined), None)
+    return phone, address, city
 
 
 def build_mapping(*texts: str) -> dict[str, str]:

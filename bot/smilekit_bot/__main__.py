@@ -33,6 +33,7 @@ from .media import (
     wants_review_photos,
 )
 from .outgoing import split_outgoing_messages
+from .privacy import extract_delivery_details
 from .sales import (
     classify_objection,
     confirms_order_offer,
@@ -477,6 +478,8 @@ async def main() -> None:
 
     def missing_delivery_details(payment: dict) -> list[str]:
         missing = []
+        if not str(payment.get("city") or "").strip():
+            missing.append("город")
         if not str(payment.get("address") or "").strip():
             missing.append("адрес доставки")
         if not str(payment.get("customer_phone") or "").strip():
@@ -1048,6 +1051,13 @@ async def main() -> None:
                 return
             pending_payment = storage.get_pending_payment(message.chat.id)
             if pending_payment is not None:
+                history_text = [item.content for item in storage.history(message.chat.id)]
+                phone, address, city = extract_delivery_details(message.caption or "", *history_text)
+                storage.update_pending_payment_details(
+                    message.chat.id, order_summary=None, customer_name=None,
+                    customer_phone=phone, city=city, address=address,
+                )
+                pending_payment = storage.get_pending_payment(message.chat.id) or pending_payment
                 photo_bytes = await download(message.photo[-1].file_id)
                 await handle_receipt_file(
                     message, pending_payment,
@@ -1083,6 +1093,13 @@ async def main() -> None:
                 and (document.mime_type == "application/pdf" or (document.file_name or "").lower().endswith(".pdf"))
             )
             if pending_payment is not None and is_pdf:
+                history_text = [item.content for item in storage.history(message.chat.id)]
+                phone, address, city = extract_delivery_details(message.caption or "", *history_text)
+                storage.update_pending_payment_details(
+                    message.chat.id, order_summary=None, customer_name=None,
+                    customer_phone=phone, city=city, address=address,
+                )
+                pending_payment = storage.get_pending_payment(message.chat.id) or pending_payment
                 try:
                     pdf_bytes = await download(document.file_id)
                 except Exception:
