@@ -1,11 +1,10 @@
-aiogram==3.21.0
+aiogram==3.30.0
 # Явная зависимость: транзитивно тянется aiogram (HTTP-клиент по умолчанию),
 # но /internal HTTP-слой (Часть 1 задачи "бот-настройки + лаборатория") использует
 # aiohttp.web напрямую, поэтому фиксируем версию явно, а не полагаемся на транзит.
-aiohttp==3.12.15
+aiohttp==3.14.3
 openai==1.97.1
 pydantic==2.11.7
 pydantic-settings==2.10.1
-pytest==8.4.1
-pytest-asyncio==1.1.0
-
+pytest==9.0.3
+pytest-asyncio==1.4.0
