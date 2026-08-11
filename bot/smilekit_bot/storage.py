@@ -91,6 +91,9 @@ class BotStorage:
                     address TEXT,
                     customer_username TEXT,
                     source TEXT,
+                    receipt_verified INTEGER NOT NULL DEFAULT 0,
+                    receipt_file_id TEXT,
+                    receipt_kind TEXT,
                     reminder_count INTEGER NOT NULL DEFAULT 0,
                     created_at REAL NOT NULL
                 );
@@ -126,6 +129,12 @@ class BotStorage:
                 self._db.execute("ALTER TABLE pending_payments ADD COLUMN customer_username TEXT")
             if "source" not in cols:
                 self._db.execute("ALTER TABLE pending_payments ADD COLUMN source TEXT")
+            if "receipt_verified" not in cols:
+                self._db.execute("ALTER TABLE pending_payments ADD COLUMN receipt_verified INTEGER NOT NULL DEFAULT 0")
+            if "receipt_file_id" not in cols:
+                self._db.execute("ALTER TABLE pending_payments ADD COLUMN receipt_file_id TEXT")
+            if "receipt_kind" not in cols:
+                self._db.execute("ALTER TABLE pending_payments ADD COLUMN receipt_kind TEXT")
             self._db.commit()
 
     def _migrate_messages_sender(self) -> None:
@@ -661,10 +670,27 @@ class BotStorage:
                     address = excluded.address,
                     customer_username = excluded.customer_username,
                     source = excluded.source,
+                    receipt_verified = 0,
+                    receipt_file_id = NULL,
+                    receipt_kind = NULL,
                     reminder_count = 0,
                     created_at = excluded.created_at
                 """,
                 (chat_id, order_summary, amount, currency, customer_name, customer_phone, city, address, customer_username, source, time.time()),
+            )
+            self._db.commit()
+
+    def mark_pending_payment_receipt(self, chat_id: int, file_id: str, kind: str) -> None:
+        with self._lock:
+            self._db.execute(
+                """
+                UPDATE pending_payments SET
+                    receipt_verified = 1,
+                    receipt_file_id = ?,
+                    receipt_kind = ?
+                WHERE chat_id = ?
+                """,
+                (file_id, kind, chat_id),
             )
             self._db.commit()
 

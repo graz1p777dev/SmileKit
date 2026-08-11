@@ -47,7 +47,12 @@ from .sales import (
     wants_payment_info,
     wants_to_order,
 )
-from .service import SmilekitAssistant
+from .service import (
+    PAYMENT_MAX_AMOUNT_KGS,
+    PAYMENT_MIN_AMOUNT_KGS,
+    PAYMENT_RECIPIENT_NAME,
+    SmilekitAssistant,
+)
 from .storage import BotStorage
 
 
@@ -344,7 +349,7 @@ async def main() -> None:
             request_message = await send_delivery_order_request(chat_id)
             storage.add_operator_message(
                 chat_id, request_message.message_id,
-                "[голосовое: отправьте чек об оплате, адрес доставки, имя и номер телефона]",
+                "[голосовое: отправьте чек об оплате, адрес доставки и номер телефона]",
             )
             storage.schedule_awaiting_payment_reminder(
                 chat_id, time.time() + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
@@ -409,6 +414,94 @@ async def main() -> None:
                 {"deliveryGroupChatId": group_chat_id},
             )
             return False
+
+    def receipt_mismatch_reasons(result: dict, today: str) -> list[str]:
+        if not result.get("is_real_receipt_screenshot"):
+            return ["изображение не подтверждено как банковский чек или квитанция"]
+        reasons = []
+        if not result.get("amount_ok"):
+            detected = result.get("detected_amount_kgs")
+            amount = f"распознано {detected:g} сом; " if isinstance(detected, (int, float)) else ""
+            reasons.append(
+                f"сумма не совпадает: {amount}допустимо {PAYMENT_MIN_AMOUNT_KGS}–{PAYMENT_MAX_AMOUNT_KGS} сом"
+            )
+        if not result.get("recipient_ok"):
+            detected = str(result.get("detected_recipient") or "не распознан")
+            reasons.append(
+                f"получатель не совпадает: распознано «{detected}», требуется «{PAYMENT_RECIPIENT_NAME}»"
+            )
+        if not result.get("date_ok"):
+            detected = str(result.get("detected_date") or "не распознана")
+            reasons.append(
+                f"дата не совпадает: распознано «{detected}», требуется сегодняшняя дата {today}"
+            )
+        return reasons or ["чек не прошёл обязательные проверки"]
+
+    async def push_receipt_mismatch_to_delivery_group(
+        payment: dict, receipt_file_id: str, receipt_kind: str, result: dict, today: str
+    ) -> bool:
+        raw_chat_id = storage.get_bot_setting(DELIVERY_GROUP_SETTING_KEY)
+        if not raw_chat_id:
+            storage.log_event(
+                payment.get("chat_id"), "error", "order", "order.receipt_review_group_missing",
+                "Проблемный чек не отправлен: группа доставки не настроена",
+            )
+            return False
+        reasons = receipt_mismatch_reasons(result, today)
+        caption = (
+            "⚠️ ЧЕК ТРЕБУЕТ РУЧНОЙ ПРОВЕРКИ\n\n"
+            f"Клиент: {payment.get('customer_name') or '—'}\n"
+            f"Ник: {('@' + str(payment.get('customer_username')).lstrip('@')) if payment.get('customer_username') else '—'}\n"
+            f"Телефон: {payment.get('customer_phone') or '—'}\n"
+            f"Адрес: {payment.get('address') or '—'}\n\n"
+            "Причины:\n• " + "\n• ".join(reasons)
+        )[:1024]
+        try:
+            group_chat_id = int(raw_chat_id)
+            if receipt_kind == "pdf":
+                await bot.send_document(group_chat_id, receipt_file_id, caption=caption)
+            else:
+                await bot.send_photo(group_chat_id, receipt_file_id, caption=caption)
+            storage.log_event(
+                payment.get("chat_id"), "warn", "order", "order.receipt_sent_for_review",
+                "Проблемный чек отправлен в группу доставки", {"reasons": reasons},
+            )
+            return True
+        except Exception as exc:
+            logging.exception("Failed to send mismatched receipt to delivery group")
+            storage.log_event(
+                payment.get("chat_id"), "error", "order", "order.receipt_review_send_failed",
+                str(exc), {"reasons": reasons},
+            )
+            return False
+
+    def missing_delivery_details(payment: dict) -> list[str]:
+        missing = []
+        if not str(payment.get("address") or "").strip():
+            missing.append("адрес доставки")
+        if not str(payment.get("customer_phone") or "").strip():
+            missing.append("номер телефона")
+        return missing
+
+    async def complete_verified_order(message: Message, payment: dict) -> None:
+        receipt_file_id = str(payment.get("receipt_file_id") or "")
+        if not receipt_file_id or missing_delivery_details(payment):
+            return
+        chat_id = message.chat.id
+        storage.clear_pending_payment(chat_id)
+        storage.cancel_nudge_follow_ups(chat_id)
+        await bot.send_chat_action(chat_id, ChatAction.TYPING)
+        await asyncio.sleep(random.uniform(0.6, 1.0))
+        await push_to_delivery_group(
+            payment,
+            receipt_file_id,
+            str(payment.get("receipt_kind") or "image"),
+        )
+        await message.answer(templates.THANK_YOU_ORDER)
+        storage.log_event(
+            chat_id, "info", "order", "order.completed",
+            "Чек, адрес и телефон получены — заказ передан в доставку",
+        )
 
     def push_deal(message: Message, *, is_new_conversation: bool) -> None:
         """Заводит сделку в CRM при первом сообщении клиента этому боту."""
@@ -606,7 +699,7 @@ async def main() -> None:
 
         # Клиент прямо спрашивает реквизиты/куда платить, либо уже подтвердил
         # заказ («можно оформить», «давайте», «беру») — в обоих случаях сразу
-        # даём QR и просим чек/адрес/имя/телефон одним сообщением, а не
+        # даём QR и просим чек/адрес/телефон одним сообщением, а не
         # собираем эти же данные через диалог с ИИ перед тем, как показать QR.
         last_assistant_message = next(
             (item.content for item in reversed(history) if item.role == "assistant"), ""
@@ -637,13 +730,13 @@ async def main() -> None:
             if QR_CODE_PATH.exists():
                 await bot.send_photo(chat_id, FSInputFile(QR_CODE_PATH))
             await send_delivery_order_request(chat_id)
-            stored_request = "[голосовое: отправьте чек об оплате, адрес доставки, имя и номер телефона]"
+            stored_request = "[голосовое: отправьте чек об оплате, адрес доставки и номер телефона]"
             storage.add_exchange(chat_id, message.message_id, text, stored_request, kind)
             storage.schedule_awaiting_payment_reminder(
                 chat_id, time.time() + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
             )
             logging.info("Payment info requested chat=%s message=%s", chat_id, message.message_id)
-            storage.log_event(chat_id, "info", "order", "order.qr_sent", "QR и запрос чек/адрес/имя/телефон отправлены", {"text": text})
+            storage.log_event(chat_id, "info", "order", "order.qr_sent", "QR и запрос чек/адрес/телефон отправлены", {"text": text})
             return
 
         # Явное возражение («я подумаю», «дорого») — готовый ответ вместо
@@ -829,6 +922,10 @@ async def main() -> None:
                 city=reply.supervisor.order.city,
                 address=reply.supervisor.order.address,
             )
+            updated_payment = storage.get_pending_payment(chat_id)
+            if updated_payment and updated_payment.get("receipt_verified"):
+                await complete_verified_order(message, updated_payment)
+                return
         task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
         follow_up_tasks.add(task)
         task.add_done_callback(follow_up_tasks.discard)
@@ -917,19 +1014,32 @@ async def main() -> None:
             result = {}
 
         if all(result.get(key) for key in ("is_real_receipt_screenshot", "amount_ok", "recipient_ok", "date_ok")):
-            storage.clear_pending_payment(chat_id)
-            storage.cancel_nudge_follow_ups(chat_id)
-            await bot.send_chat_action(chat_id, ChatAction.TYPING)
-            await asyncio.sleep(random.uniform(0.6, 1.0))
-            await push_to_delivery_group(pending, file_id, kind)
-            await message.answer(templates.THANK_YOU_ORDER)
+            storage.mark_pending_payment_receipt(chat_id, file_id, kind)
+            updated_payment = storage.get_pending_payment(chat_id) or pending
+            missing = missing_delivery_details(updated_payment)
+            if missing:
+                await message.answer(
+                    "Чек подтверждён ✅ Теперь отправьте, пожалуйста: "
+                    + " и ".join(missing)
+                    + ". Имя не требуется."
+                )
+                storage.schedule_awaiting_payment_reminder(
+                    chat_id, time.time() + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
+                )
+                storage.log_event(
+                    chat_id, "info", "order", "order.receipt_waiting_details",
+                    "Чек подтверждён, бот ждёт адрес и телефон", {"missing": missing},
+                )
+                return
+            await complete_verified_order(message, updated_payment)
             storage.log_event(chat_id, "info", "order", "order.receipt_verified", "Чек прошёл проверку, заказ подтверждён")
         else:
-            await message.answer(templates.receipt_mismatch_reply(result))
-            storage.schedule_awaiting_payment_reminder(
-                chat_id, time.time() + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
+            storage.cancel_nudge_follow_ups(chat_id)
+            await push_receipt_mismatch_to_delivery_group(pending, file_id, kind, result, today)
+            storage.log_event(
+                chat_id, "warn", "order", "order.receipt_mismatch",
+                "Чек не прошёл проверку; клиенту сообщение не отправлено", result,
             )
-            storage.log_event(chat_id, "warn", "order", "order.receipt_mismatch", "Чек не прошёл проверку", result)
 
     @dp.message(F.photo)
     async def handle_photo(message: Message) -> None:

@@ -67,6 +67,32 @@ def test_pending_payment_collects_delivery_details_after_qr(tmp_path):
     storage.close()
 
 
+def test_verified_receipt_is_kept_while_bot_waits_for_delivery_details(tmp_path):
+    storage = BotStorage(str(tmp_path / "bot.db"))
+    storage.save_pending_payment(
+        43,
+        order_summary="1 коробка",
+        amount=1490,
+        currency="KGS",
+        customer_name=None,
+        customer_phone=None,
+        city=None,
+        address=None,
+        customer_username="client",
+        source="Telegram",
+    )
+
+    storage.mark_pending_payment_receipt(43, "receipt-file-id", "image")
+
+    payment = storage.get_pending_payment(43)
+    assert payment is not None
+    assert payment["receipt_verified"] == 1
+    assert payment["receipt_file_id"] == "receipt-file-id"
+    assert payment["receipt_kind"] == "image"
+    assert payment["customer_name"] is None
+    storage.close()
+
+
 def test_rate_limit_blocks_extra_messages(tmp_path):
     storage = BotStorage(str(tmp_path / "bot.db"))
     assert storage.allow_request(1, limit=2)

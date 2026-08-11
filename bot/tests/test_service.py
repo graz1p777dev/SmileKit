@@ -319,6 +319,25 @@ async def test_verify_receipt_reports_recipient_mismatch(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_verify_receipt_returns_detected_values_for_explicit_group_reason(tmp_path):
+    mismatch = {
+        **_FULL_MATCH,
+        "amount_ok": False,
+        "date_ok": False,
+        "detected_amount_kgs": 230,
+        "detected_recipient": "Халикхан А.",
+        "detected_date": "07.08.2026",
+    }
+    responses = FakeRouteResponses(mismatch, function_name="submit_receipt_check")
+    result = await assistant(tmp_path, responses).verify_receipt(
+        "data:image/jpeg;base64,abc", "2026-08-11"
+    )
+
+    assert result["detected_amount_kgs"] == 230
+    assert result["detected_date"] == "07.08.2026"
+
+
+@pytest.mark.asyncio
 async def test_verify_receipt_without_function_call_is_unverified(tmp_path):
     responses = FakeRouteResponses(None, function_name="submit_receipt_check")
     result = await assistant(tmp_path, responses).verify_receipt(

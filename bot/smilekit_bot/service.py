@@ -25,6 +25,7 @@ RECEIPT_CHECK_TIMEOUT_SECONDS = 20
 # здесь.
 PAYMENT_RECIPIENT_NAME = "Халикхан А."
 PAYMENT_MIN_AMOUNT_KGS = 1190
+PAYMENT_MAX_AMOUNT_KGS = 1490
 
 RECEIPT_CHECK_PROMPT = (
     "Ты проверяешь чек оплаты клиента Smilekit (фото или PDF) по четырём "
@@ -32,12 +33,14 @@ RECEIPT_CHECK_PROMPT = (
     "1. is_real_receipt_screenshot — это реальный скриншот банковского "
     "перевода или квитанции об оплате (интерфейс банка/приложения), а не "
     "текстовое сообщение, заметка или случайная картинка.\n"
-    f"2. amount_ok — сумма перевода на чеке не меньше {PAYMENT_MIN_AMOUNT_KGS} "
+    f"2. amount_ok — сумма перевода на чеке от {PAYMENT_MIN_AMOUNT_KGS} до "
+    f"{PAYMENT_MAX_AMOUNT_KGS} включительно "
     "(в сомах, либо эквивалент в другой валюте, если валюта не сом).\n"
     f"3. recipient_ok — получатель на чеке — «{PAYMENT_RECIPIENT_NAME}» "
     "(совпадение фамилии и инициала; другое имя получателя — это несовпадение).\n"
     "4. date_ok — дата и время перевода на чеке совпадают с сегодняшней датой, "
-    "которая будет указана в сообщении ниже (старый или будущий чек — несовпадение)."
+    "которая будет указана в сообщении ниже (старый или будущий чек — несовпадение).\n"
+    "Также обязательно извлеки видимые сумму, получателя и дату в отдельные поля."
 )
 
 RECEIPT_TOOL = {
@@ -53,7 +56,7 @@ RECEIPT_TOOL = {
             },
             "amount_ok": {
                 "type": "boolean",
-                "description": f"Сумма на чеке не меньше {PAYMENT_MIN_AMOUNT_KGS}.",
+                "description": f"Сумма на чеке от {PAYMENT_MIN_AMOUNT_KGS} до {PAYMENT_MAX_AMOUNT_KGS} сом включительно.",
             },
             "recipient_ok": {
                 "type": "boolean",
@@ -63,8 +66,23 @@ RECEIPT_TOOL = {
                 "type": "boolean",
                 "description": "Дата и время перевода — сегодняшние.",
             },
+            "detected_amount_kgs": {
+                "type": ["number", "null"],
+                "description": "Сумма перевода, прочитанная на чеке, в сомах; null, если не видна.",
+            },
+            "detected_recipient": {
+                "type": ["string", "null"],
+                "description": "Получатель, прочитанный на чеке; null, если не виден.",
+            },
+            "detected_date": {
+                "type": ["string", "null"],
+                "description": "Дата перевода, прочитанная на чеке; null, если не видна.",
+            },
         },
-        "required": ["is_real_receipt_screenshot", "amount_ok", "recipient_ok", "date_ok"],
+        "required": [
+            "is_real_receipt_screenshot", "amount_ok", "recipient_ok", "date_ok",
+            "detected_amount_kgs", "detected_recipient", "detected_date",
+        ],
         "additionalProperties": False,
     },
 }
@@ -467,12 +485,16 @@ class SmilekitAssistant:
                 continue
             try:
                 result = json.loads(item.arguments)
-                return {
+                parsed = {
                     "is_real_receipt_screenshot": bool(result.get("is_real_receipt_screenshot")),
                     "amount_ok": bool(result.get("amount_ok")),
                     "recipient_ok": bool(result.get("recipient_ok")),
                     "date_ok": bool(result.get("date_ok")),
                 }
+                for key in ("detected_amount_kgs", "detected_recipient", "detected_date"):
+                    if result.get(key) is not None:
+                        parsed[key] = result[key]
+                return parsed
             except (json.JSONDecodeError, AttributeError):
                 break
         return dict(self._RECEIPT_FAILURE)
