@@ -28,6 +28,10 @@ VOICE_ASSETS = {
     "first_use_effect.ogg": Path(__file__).resolve().parent.parent / "assets" / "voice" / "first_use_effect.ogg",
     "not_scam.ogg": Path(__file__).resolve().parent.parent / "assets" / "voice" / "not_scam.ogg",
 }
+RESULT_ASSETS = {
+    "before.jpg": Path(__file__).resolve().parent.parent / "assets" / "results" / "before.jpg",
+    "after.jpg": Path(__file__).resolve().parent.parent / "assets" / "results" / "after.jpg",
+}
 MAX_TRANSCRIPTION_BYTES = 20 * 1024 * 1024
 
 MANAGER_PROMPT_KEY = "manager_prompt"
@@ -106,6 +110,13 @@ async def health(request: web.Request) -> web.Response:
 
 async def get_voice_asset_handler(request: web.Request) -> web.StreamResponse:
     path = VOICE_ASSETS.get(request.match_info["name"])
+    if path is None or not path.exists():
+        raise web.HTTPNotFound()
+    return web.FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
+
+
+async def get_result_asset_handler(request: web.Request) -> web.StreamResponse:
+    path = RESULT_ASSETS.get(request.match_info["name"])
     if path is None or not path.exists():
         raise web.HTTPNotFound()
     return web.FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
@@ -369,6 +380,7 @@ def create_app(
     app["bot"] = bot
     app.router.add_get("/internal/health", health)
     app.router.add_get("/media/voice/{name}", get_voice_asset_handler)
+    app.router.add_get("/media/results/{name}", get_result_asset_handler)
     app.router.add_get("/internal/settings", get_settings_handler)
     app.router.add_put("/internal/settings", put_settings_handler)
     app.router.add_post("/internal/lab", post_lab_handler)
