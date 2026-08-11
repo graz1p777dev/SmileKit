@@ -616,17 +616,22 @@ async def main() -> None:
         # Рекламная ссылка и слово «Улыбка» — это только вход в диалог. Не
         # обсуждаем содержимое ссылки и не спрашиваем город.
         if kind == "text" and (is_link_message or is_greeting_message):
-            await message.answer(templates.GREETING)
+            for index, reply_text in enumerate(templates.GREETING_MESSAGES):
+                if index:
+                    await bot.send_chat_action(chat_id, ChatAction.TYPING)
+                    await asyncio.sleep(random.uniform(0.6, 1.0))
+                await message.answer(reply_text)
             storage.add_exchange(chat_id, message.message_id, text, templates.GREETING, kind)
             return
 
         # Цена и эффект отправляются отдельными пузырями. Город спрашиваем
         # только тогда, когда клиент сам переходит к вопросу о доставке.
         if kind == "text" and is_price_message:
-            replies = ([templates.GREETING] if is_new_conversation else []) + [
-                templates.PRODUCT_INFO,
-                templates.PRODUCT_EFFECT,
-            ]
+            replies = (
+                list(templates.GREETING_MESSAGES)
+                if is_new_conversation
+                else [templates.PRODUCT_INFO, templates.PRODUCT_EFFECT]
+            )
             for index, reply_text in enumerate(replies):
                 if index:
                     await bot.send_chat_action(chat_id, ChatAction.TYPING)
@@ -635,10 +640,14 @@ async def main() -> None:
             storage.add_exchange(chat_id, message.message_id, text, "\n\n".join(replies), kind)
             return
 
-        # Первый контакт — только обычное приветствие, без продажи и вопроса
-        # «вы в Бишкеке?». Дальше отвечаем на фактический вопрос клиента.
+        # Первый контакт — утверждённый шаблон SmileKit отдельными сообщениями,
+        # без вопроса «вы в Бишкеке?». Дальше отвечаем по сценарию клиента.
         if is_new_conversation:
-            await message.answer(templates.GREETING)
+            for index, reply_text in enumerate(templates.GREETING_MESSAGES):
+                if index:
+                    await bot.send_chat_action(chat_id, ChatAction.TYPING)
+                    await asyncio.sleep(random.uniform(0.6, 1.0))
+                await message.answer(reply_text)
             storage.add_exchange(
                 chat_id, message.message_id,
                 f"[{kind}] {text}" if kind != "text" else text,
@@ -814,7 +823,11 @@ async def main() -> None:
                 return
             chat_id = message.chat.id
             storage.clear_chat(chat_id)
-            await message.answer(templates.GREETING)
+            for index, reply_text in enumerate(templates.GREETING_MESSAGES):
+                if index:
+                    await bot.send_chat_action(chat_id, ChatAction.TYPING)
+                    await asyncio.sleep(random.uniform(0.6, 1.0))
+                await message.answer(reply_text)
             storage.add_exchange(
                 chat_id, message.message_id, "/start",
                 templates.GREETING, "command",
