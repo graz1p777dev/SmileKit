@@ -534,6 +534,14 @@ def test_returning_customer_greeting_is_detected_without_restarting_sales_flow()
     assert not is_greeting_only("Здравствуйте, сколько стоит?")
 
 
+def test_scam_doubt_understands_uncertain_and_colloquial_wording():
+    from smilekit_bot.sales import asks_scam_doubt
+
+    assert asks_scam_doubt("А вдруг вы мошенники")
+    assert asks_scam_doubt("Это всё реально да?")
+    assert asks_scam_doubt("Точно без обмана?")
+
+
 def test_is_complaint_detects_explicit_negativity():
     from smilekit_bot.sales import is_complaint
 

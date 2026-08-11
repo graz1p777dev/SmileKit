@@ -45,6 +45,8 @@ def test_pending_payment_collects_delivery_details_after_qr(tmp_path):
         customer_phone=None,
         city="Бишкек",
         address=None,
+        customer_username="client",
+        source="Telegram",
     )
 
     storage.update_pending_payment_details(

@@ -89,6 +89,8 @@ class BotStorage:
                     customer_phone TEXT,
                     city TEXT,
                     address TEXT,
+                    customer_username TEXT,
+                    source TEXT,
                     reminder_count INTEGER NOT NULL DEFAULT 0,
                     created_at REAL NOT NULL
                 );
@@ -120,7 +122,11 @@ class BotStorage:
             cols = [row["name"] for row in self._db.execute("PRAGMA table_info(pending_payments)")]
             if "address" not in cols:
                 self._db.execute("ALTER TABLE pending_payments ADD COLUMN address TEXT")
-                self._db.commit()
+            if "customer_username" not in cols:
+                self._db.execute("ALTER TABLE pending_payments ADD COLUMN customer_username TEXT")
+            if "source" not in cols:
+                self._db.execute("ALTER TABLE pending_payments ADD COLUMN source TEXT")
+            self._db.commit()
 
     def _migrate_messages_sender(self) -> None:
         """sender различает автора исходящего: bot | operator (role остаётся
@@ -636,13 +642,15 @@ class BotStorage:
         customer_phone: str | None,
         city: str | None,
         address: str | None,
+        customer_username: str | None,
+        source: str | None,
     ) -> None:
         with self._lock:
             self._db.execute(
                 """
                 INSERT INTO pending_payments
-                    (chat_id, order_summary, amount, currency, customer_name, customer_phone, city, address, reminder_count, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                    (chat_id, order_summary, amount, currency, customer_name, customer_phone, city, address, customer_username, source, reminder_count, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
                 ON CONFLICT(chat_id) DO UPDATE SET
                     order_summary = excluded.order_summary,
                     amount = excluded.amount,
@@ -651,10 +659,12 @@ class BotStorage:
                     customer_phone = excluded.customer_phone,
                     city = excluded.city,
                     address = excluded.address,
+                    customer_username = excluded.customer_username,
+                    source = excluded.source,
                     reminder_count = 0,
                     created_at = excluded.created_at
                 """,
-                (chat_id, order_summary, amount, currency, customer_name, customer_phone, city, address, time.time()),
+                (chat_id, order_summary, amount, currency, customer_name, customer_phone, city, address, customer_username, source, time.time()),
             )
             self._db.commit()
 

@@ -97,6 +97,7 @@ INSTRUCTIONS_IMAGE_PATH = Path(__file__).resolve().parent.parent / "assets" / "i
 EFFECT_PHOTO_PATH = Path(__file__).resolve().parent.parent / "assets" / "results" / "after.jpg"
 FIRST_USE_EFFECT_VOICE_PATH = Path(__file__).resolve().parent.parent / "assets" / "voice" / "first_use_effect.ogg"
 NOT_SCAM_VOICE_PATH = Path(__file__).resolve().parent.parent / "assets" / "voice" / "not_scam.ogg"
+DELIVERY_ORDER_VOICE_PATH = Path(__file__).resolve().parent.parent / "assets" / "voice" / "delivery_order.ogg"
 # Дожим по оплате: QR не шлём повторно, только переспрашиваем; после
 # нескольких напоминаний останавливаемся — менеджер разберётся вручную,
 # когда клиент всё же пришлёт чек.
@@ -285,6 +286,15 @@ async def main() -> None:
             # Заказ оформлен — сделка передаётся менеджеру на закрытие.
             await crm.advance_stage(chat_id, "order")
 
+    async def send_delivery_order_request(chat_id: int) -> Message:
+        """Просит данные для доставки голосом; текст остаётся запасным вариантом."""
+        if DELIVERY_ORDER_VOICE_PATH.exists():
+            await bot.send_chat_action(chat_id, ChatAction.RECORD_VOICE)
+            await asyncio.sleep(random.uniform(0.5, 0.9))
+            return await bot.send_voice(chat_id, FSInputFile(DELIVERY_ORDER_VOICE_PATH))
+        logging.warning("Delivery order voice missing at %s", DELIVERY_ORDER_VOICE_PATH)
+        return await bot.send_message(chat_id, templates.PAYMENT_QR_MESSAGE)
+
     async def push_order(message: Message, supervisor) -> bool:
         """Запрашивает оплату по QR и заводит заказ в CRM.
 
@@ -324,15 +334,18 @@ async def main() -> None:
                 customer_phone=payload.get("customerPhone"),
                 city=payload.get("city"),
                 address=payload.get("address"),
+                customer_username=payload.get("customerUsername"),
+                source="Telegram",
             )
-            await bot.send_chat_action(chat_id, ChatAction.TYPING)
-            await asyncio.sleep(random.uniform(0.6, 1.0))
-            qr_message = await message.answer(templates.PAYMENT_QR_MESSAGE)
-            storage.add_operator_message(chat_id, qr_message.message_id, templates.PAYMENT_QR_MESSAGE)
             if QR_CODE_PATH.exists():
                 await bot.send_photo(chat_id, FSInputFile(QR_CODE_PATH))
             else:
                 logging.warning("QR code file missing at %s — assets/qrcode.jpeg not provided", QR_CODE_PATH)
+            request_message = await send_delivery_order_request(chat_id)
+            storage.add_operator_message(
+                chat_id, request_message.message_id,
+                "[голосовое: отправьте чек об оплате, адрес доставки, имя и номер телефона]",
+            )
             storage.schedule_awaiting_payment_reminder(
                 chat_id, time.time() + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
             )
@@ -348,7 +361,7 @@ async def main() -> None:
         task.add_done_callback(crm_tasks.discard)
         return True
 
-    async def push_to_delivery_group(payment: dict, receipt_file_id: str, receipt_kind: str = "image") -> None:
+    async def push_to_delivery_group(payment: dict, receipt_file_id: str, receipt_kind: str = "image") -> bool:
         """Пересылает оплаченный заказ доставщикам вместе с чеком клиента.
 
         Группа регистрируется администратором командой /delivery_group.
@@ -357,7 +370,9 @@ async def main() -> None:
         order_summary = str(payment.get("order_summary") or "—")[:350]
         caption = (
             f"Новый оплаченный заказ 📦\n"
+            f"Источник: {payment.get('source') or 'Telegram'}\n"
             f"Имя: {payment.get('customer_name') or '—'}\n"
+            f"Ник: {('@' + str(payment.get('customer_username')).lstrip('@')) if payment.get('customer_username') else '—'}\n"
             f"Телефон: {payment.get('customer_phone') or '—'}\n"
             f"Город: {payment.get('city') or '—'}\n"
             f"Адрес: {payment.get('address') or '—'}\n"
@@ -374,7 +389,7 @@ async def main() -> None:
                 "Delivery group not configured yet (DELIVERY_GROUP_CHAT_ID=0). Order details:\n%s",
                 caption,
             )
-            return
+            return False
         try:
             if receipt_kind == "pdf":
                 await bot.send_document(group_chat_id, receipt_file_id, caption=caption)
@@ -385,6 +400,7 @@ async def main() -> None:
                 "Оплаченный заказ и чек отправлены в группу доставки",
                 {"deliveryGroupChatId": group_chat_id},
             )
+            return True
         except Exception:
             logging.exception("Failed to send paid order to delivery group chat=%s", group_chat_id)
             storage.log_event(
@@ -392,6 +408,7 @@ async def main() -> None:
                 "Не удалось отправить оплаченный заказ в группу доставки",
                 {"deliveryGroupChatId": group_chat_id},
             )
+            return False
 
     def push_deal(message: Message, *, is_new_conversation: bool) -> None:
         """Заводит сделку в CRM при первом сообщении клиента этому боту."""
@@ -614,11 +631,14 @@ async def main() -> None:
                 customer_phone=None,
                 city=None,
                 address=None,
+                customer_username=(message.from_user.username if message.from_user else None),
+                source="Telegram",
             )
             if QR_CODE_PATH.exists():
                 await bot.send_photo(chat_id, FSInputFile(QR_CODE_PATH))
-            await message.answer(templates.PAYMENT_INFO_REQUEST)
-            storage.add_exchange(chat_id, message.message_id, text, templates.PAYMENT_INFO_REQUEST, kind)
+            await send_delivery_order_request(chat_id)
+            stored_request = "[голосовое: отправьте чек об оплате, адрес доставки, имя и номер телефона]"
+            storage.add_exchange(chat_id, message.message_id, text, stored_request, kind)
             storage.schedule_awaiting_payment_reminder(
                 chat_id, time.time() + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
             )
@@ -901,15 +921,8 @@ async def main() -> None:
             storage.cancel_nudge_follow_ups(chat_id)
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.6, 1.0))
-            if INSTRUCTIONS_IMAGE_PATH.exists():
-                await bot.send_photo(chat_id, FSInputFile(INSTRUCTIONS_IMAGE_PATH))
-            await message.answer(templates.USAGE_INSTRUCTIONS)
-            await bot.send_chat_action(chat_id, ChatAction.TYPING)
-            await asyncio.sleep(random.uniform(0.6, 1.0))
+            await push_to_delivery_group(pending, file_id, kind)
             await message.answer(templates.THANK_YOU_ORDER)
-            task = asyncio.create_task(push_to_delivery_group(pending, file_id, kind))
-            crm_tasks.add(task)
-            task.add_done_callback(crm_tasks.discard)
             storage.log_event(chat_id, "info", "order", "order.receipt_verified", "Чек прошёл проверку, заказ подтверждён")
         else:
             await message.answer(templates.receipt_mismatch_reply(result))
