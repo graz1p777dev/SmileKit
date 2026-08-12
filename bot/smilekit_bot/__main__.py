@@ -7,7 +7,7 @@ from collections import defaultdict
 from io import BytesIO
 from pathlib import Path
 
-from aiogram import Bot, Dispatcher, F
+from aiogram import BaseMiddleware, Bot, Dispatcher, F
 from aiogram.enums import ChatAction, ChatMemberStatus, ChatType
 from aiogram.filters import Command, CommandStart
 from aiogram.types import FSInputFile, Message
@@ -120,6 +120,17 @@ FOLLOWUP_SAME_DAY_SEND_HOUR_BISHKEK = 19.5
 FOLLOWUP_NEXT_DAY_SEND_HOUR_BISHKEK = 12
 
 
+class GroupSilenceMiddleware(BaseMiddleware):
+    """В группах бот служит только доставке и не ведёт клиентский диалог."""
+
+    async def __call__(self, handler, event: Message, data):
+        if event.chat.type in {ChatType.GROUP, ChatType.SUPERGROUP}:
+            command = (event.text or "").split(maxsplit=1)[0].lower()
+            if not command.startswith("/delivery_group"):
+                return None
+        return await handler(event, data)
+
+
 def next_idle_followup_due_at(now: float) -> float:
     shifted = now + BISHKEK_UTC_OFFSET_SECONDS
     day_start = shifted - (shifted % 86400)
@@ -149,6 +160,7 @@ async def main() -> None:
     settings = Settings()
     bot = Bot(token=settings.telegram_bot_token.get_secret_value())
     dp = Dispatcher()
+    dp.message.middleware(GroupSilenceMiddleware())
     assistant = SmilekitAssistant(
         api_key=settings.openai_api_key.get_secret_value(),
         model=settings.openai_model,
