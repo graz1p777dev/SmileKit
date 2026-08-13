@@ -16,12 +16,16 @@ import time
 from pathlib import Path
 
 from aiohttp import web
+from aiogram.types import BufferedInputFile
 
 from .config import Settings
 from .models import ChatMessage
 from .prompts import MANAGER_PROMPT, SUPERVISOR_PROMPT
 from .service import SmilekitAssistant
 from .storage import BotStorage
+
+DELIVERY_GROUP_SETTING_KEY = "delivery_group_chat_id"
+MAX_RECEIPT_BYTES = 20 * 1024 * 1024
 
 LOGGER = logging.getLogger(__name__)
 VOICE_ASSETS = {
@@ -31,6 +35,9 @@ VOICE_ASSETS = {
 RESULT_ASSETS = {
     "before.jpg": Path(__file__).resolve().parent.parent / "assets" / "results" / "before.jpg",
     "after.jpg": Path(__file__).resolve().parent.parent / "assets" / "results" / "after.jpg",
+    # Тот же набор, что уходит альбомом в Telegram (media.result_photo_group)
+    # — WhatsApp-канал берёт эти файлы по ссылке.
+    "resultotzyv.jpeg": Path(__file__).resolve().parent.parent / "assets" / "results" / "resultotzyv.jpeg",
 }
 MAX_TRANSCRIPTION_BYTES = 20 * 1024 * 1024
 
@@ -385,6 +392,120 @@ async def post_lab_handler(request: web.Request) -> web.Response:
     )
 
 
+async def post_verify_receipt_handler(request: web.Request) -> web.Response:
+    """Проверка чека для внешних каналов (сейчас — WhatsApp/amoCRM), где
+    свой приём фото/файлов от Telegram не участвует. Критерии те же самые
+    (assistant.verify_receipt), что и для Telegram-бота."""
+    denied = _require_auth(request)
+    if denied is not None:
+        return denied
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid_json"}, status=400)
+    encoded = body.get("imageBase64") if isinstance(body, dict) else None
+    today = body.get("today") if isinstance(body, dict) else None
+    kind = body.get("kind") if isinstance(body, dict) else "image"
+    mime = body.get("mime") if isinstance(body, dict) else None
+    if not isinstance(encoded, str) or not isinstance(today, str):
+        return web.json_response({"error": "imageBase64 and today are required"}, status=400)
+    if kind not in ("image", "pdf"):
+        return web.json_response({"error": "kind must be image or pdf"}, status=400)
+    try:
+        file_bytes = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error):
+        return web.json_response({"error": "invalid_image"}, status=400)
+    if not file_bytes or len(file_bytes) > MAX_RECEIPT_BYTES:
+        return web.json_response({"error": "invalid_image_size"}, status=400)
+    if not mime:
+        mime = "application/pdf" if kind == "pdf" else "image/jpeg"
+
+    assistant: SmilekitAssistant = request.app["assistant"]
+    result = await assistant.verify_receipt(f"data:{mime};base64,{encoded}", today, kind=kind)
+    return web.json_response(result)
+
+
+def _delivery_group_chat_id(storage: BotStorage, settings: Settings) -> int:
+    saved = storage.get_bot_setting(DELIVERY_GROUP_SETTING_KEY)
+    try:
+        return int(saved) if saved else settings.delivery_group_chat_id
+    except ValueError:
+        return settings.delivery_group_chat_id
+
+
+async def post_push_delivery_handler(request: web.Request) -> web.Response:
+    """Отправляет подтверждённый заказ (или проблемный чек на ручную
+    проверку) в ту же группу доставки, что уже настроена для Telegram —
+    источник заказа виден в подписи (source: 'Telegram' | 'WhatsApp').
+    Файл чека передаётся байтами, а не telegram file_id — заказ мог прийти
+    не из Telegram, и file_id для него просто не существует."""
+    denied = _require_auth(request)
+    if denied is not None:
+        return denied
+    bot = request.app.get("bot")
+    if bot is None:
+        return web.json_response({"error": "bot_unavailable"}, status=503)
+    storage: BotStorage = request.app["storage"]
+    settings: Settings = request.app["settings"]
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid_json"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "invalid_body"}, status=400)
+
+    encoded = body.get("imageBase64")
+    kind = body.get("kind") or "image"
+    if not isinstance(encoded, str):
+        return web.json_response({"error": "imageBase64 is required"}, status=400)
+    try:
+        file_bytes = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error):
+        return web.json_response({"error": "invalid_image"}, status=400)
+    if not file_bytes or len(file_bytes) > MAX_RECEIPT_BYTES:
+        return web.json_response({"error": "invalid_image_size"}, status=400)
+
+    group_chat_id = _delivery_group_chat_id(storage, settings)
+    if not group_chat_id:
+        return web.json_response({"error": "delivery_group_not_configured"}, status=409)
+
+    source = str(body.get("source") or "WhatsApp")
+    reasons = body.get("mismatchReasons") if isinstance(body.get("mismatchReasons"), list) else None
+    if reasons:
+        caption = (
+            "⚠️ ЧЕК ТРЕБУЕТ РУЧНОЙ ПРОВЕРКИ\n\n"
+            f"Источник: {source}\n"
+            f"Клиент: {body.get('customerName') or '—'}\n"
+            f"Телефон: {body.get('customerPhone') or '—'}\n"
+            f"Адрес: {body.get('address') or '—'}\n\n"
+            "Причины:\n• " + "\n• ".join(str(r) for r in reasons)
+        )[:1024]
+    else:
+        order_summary = str(body.get("orderSummary") or "—")[:350]
+        caption = (
+            f"Новый оплаченный заказ 📦\n"
+            f"Источник: {source}\n"
+            f"Имя: {body.get('customerName') or '—'}\n"
+            f"Телефон: {body.get('customerPhone') or '—'}\n"
+            f"Город: {body.get('city') or '—'}\n"
+            f"Адрес: {body.get('address') or '—'}\n"
+            f"Что взял: {order_summary}\n"
+            f"Сумма: {body.get('amount') or '—'} {body.get('currency') or ''}"
+        )
+
+    file_name = "receipt.pdf" if kind == "pdf" else "receipt.jpg"
+    input_file = BufferedInputFile(file_bytes, filename=file_name)
+    try:
+        if kind == "pdf":
+            await bot.send_document(group_chat_id, input_file, caption=caption)
+        else:
+            await bot.send_photo(group_chat_id, input_file, caption=caption)
+    except Exception:
+        LOGGER.exception("Failed to push %s order to delivery group chat=%s", source, group_chat_id)
+        return web.json_response({"error": "send_failed"}, status=502)
+    return web.json_response({"ok": True})
+
+
 @web.middleware
 async def error_middleware(request: web.Request, handler):
     try:
@@ -411,6 +532,8 @@ def create_app(
     app.router.add_put("/internal/settings", put_settings_handler)
     app.router.add_post("/internal/lab", post_lab_handler)
     app.router.add_post("/internal/transcribe", post_transcribe_handler)
+    app.router.add_post("/internal/verify_receipt", post_verify_receipt_handler)
+    app.router.add_post("/internal/push_delivery", post_push_delivery_handler)
     app.router.add_get("/internal/chats", get_chats_handler)
     app.router.add_get("/internal/chats/{chat_id}/messages", get_chat_messages_handler)
     app.router.add_get("/internal/chats/{chat_id}/status", get_chat_status_handler)
