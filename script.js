@@ -2,6 +2,37 @@
 
 const calm = matchMedia('(prefers-reduced-motion: reduce)').matches
 
+// Переход по прямой ссылке вида /#faq: браузер прыгает к якорю один раз,
+// сразу на старте, пока страница ещё в системном шрифте. Когда Google Fonts
+// (display=swap) подменяют начертание, высота текста над якорем меняется,
+// и секция уезжает — снаружи это выглядит как "ссылка ведёт не туда".
+// Пересчитываем позицию после подгрузки шрифтов и после полной отрисовки.
+if (location.hash) {
+  const settleHash = () => {
+    const target = document.querySelector(location.hash)
+    if (!target) return
+    // behavior:'instant' — не 'smooth': плавная прокрутка идёт через
+    // requestAnimationFrame, а его браузеры замораживают в фоновой вкладке
+    // (например, если ссылку из бота открыли не активной). Анимация тогда
+    // застревает на первом кадре, и страница остаётся у самого верха.
+    target.scrollIntoView({ block: 'start', behavior: 'instant' })
+    // Секция, на которую прыгнули, не должна ждать своей очереди в
+    // IntersectionObserver — иначе гость по прямой ссылке первые доли
+    // секунды видит пустоту вместо контента (та же причина, по которой
+    // hero проигрывается сразу, без ожидания скролла).
+    target.querySelectorAll('.reveal').forEach((el) => el.classList.add('is-visible'))
+    target.classList.add('is-visible')
+  }
+  // instant-скролл синхронный — в отличие от smooth, повторные вызовы
+  // не анимируются и не накапливают смещение, поэтому дёргаем несколько раз
+  // на случай, если картинки/шрифты досчитают высоту страницы позже.
+  settleHash()
+  document.fonts?.ready.then(settleHash)
+  addEventListener('load', settleHash)
+  setTimeout(settleHash, 400)
+  setTimeout(settleHash, 1200)
+}
+
 // Заголовки разбиваем на слова, чтобы они выезжали из-под маски
 document.querySelectorAll('.js-split').forEach((title) => {
   const parts = []
@@ -193,21 +224,15 @@ if (shots) {
   )
 }
 
-// FAQ
+// FAQ — раскрытие через grid-template-rows (в CSS), тут только переключаем состояние
 document.querySelectorAll('.faq__q').forEach((question) => {
-  const answer = question.nextElementSibling
-
   question.addEventListener('click', () => {
     const isOpen = question.getAttribute('aria-expanded') === 'true'
 
     document.querySelectorAll('.faq__q[aria-expanded="true"]').forEach((other) => {
       other.setAttribute('aria-expanded', 'false')
-      other.nextElementSibling.style.maxHeight = null
     })
 
-    if (!isOpen) {
-      question.setAttribute('aria-expanded', 'true')
-      answer.style.maxHeight = answer.scrollHeight + 'px'
-    }
+    if (!isOpen) question.setAttribute('aria-expanded', 'true')
   })
 })

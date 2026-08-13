@@ -73,6 +73,8 @@ ROUTED_TEMPLATES = {
     "safety_composition": templates.SAFETY_COMPOSITION,
     "single_piece_purchase": templates.SINGLE_PIECE_POLICY,
     "discount_offer": templates.DISCOUNT_OFFER,
+    # Не выдаётся роутером напрямую — только вторым шагом торга, см. ниже.
+    "discount_offer_final": templates.DISCOUNT_OFFER_FINAL,
     "usage_instructions": templates.USAGE_INSTRUCTIONS,
     "braces_compatibility": templates.BRACES_REPLY,
     "result_doubt": templates.DOUBT_RESULT_REPLY,
@@ -340,7 +342,13 @@ async def main() -> None:
             # ИИ не всегда фиксирует итоговую сумму при индивидуальной
             # скидке — если её нет, но скидка предлагалась в этом диалоге,
             # это надёжнее как дефолт, чем полная цена.
-            default_amount = 1190 if storage.has_event(chat_id, "discount_offered") else 1490
+            # Скидка двухступенчатая: 13% (1290), затем 20% (1190).
+            if storage.has_event(chat_id, "discount_offered_final"):
+                default_amount = 1190
+            elif storage.has_event(chat_id, "discount_offered"):
+                default_amount = 1290
+            else:
+                default_amount = 1490
             amount = payload.get("totalAmount") or (default_amount * (payload.get("quantity") or 1))
             currency = payload.get("currency") or "KGS"
             storage.save_pending_payment(
@@ -729,7 +737,13 @@ async def main() -> None:
             )
             and storage.get_pending_payment(chat_id) is None
         ):
-            default_amount = 1190 if storage.has_event(chat_id, "discount_offered") else 1490
+            # Скидка двухступенчатая: 13% (1290), затем 20% (1190).
+            if storage.has_event(chat_id, "discount_offered_final"):
+                default_amount = 1190
+            elif storage.has_event(chat_id, "discount_offered"):
+                default_amount = 1290
+            else:
+                default_amount = 1490
             storage.save_pending_payment(
                 chat_id,
                 order_summary="Клиент подтвердил заказ / запросил реквизиты оплаты",
@@ -799,9 +813,13 @@ async def main() -> None:
         if kind == "text":
             template_id = await assistant.route(text, history, model=current_settings["model"])
             if template_id == "discount_offer" and not storage.claim_event(chat_id, "discount_offered"):
-                # Скидку предлагаем только один раз за диалог — повторную
-                # просьбу пусть обработает обычная генерация по контексту.
-                template_id = None
+                # 13% уже предлагали. Вторая просьба — последняя уступка, 20%;
+                # дальше скидок нет, разговор ведёт обычная генерация.
+                template_id = (
+                    "discount_offer_final"
+                    if storage.claim_event(chat_id, "discount_offered_final")
+                    else None
+                )
             template_text = ROUTED_TEMPLATES.get(template_id)
             if template_text:
                 if template_id == "usage_instructions" and INSTRUCTIONS_IMAGE_PATH.exists():
