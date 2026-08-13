@@ -38,6 +38,10 @@ RESULT_ASSETS = {
     # Тот же набор, что уходит альбомом в Telegram (media.result_photo_group)
     # — WhatsApp-канал берёт эти файлы по ссылке.
     "resultotzyv.jpeg": Path(__file__).resolve().parent.parent / "assets" / "results" / "resultotzyv.jpeg",
+    # QR оплаты и инструкция: в Telegram уходят файлами напрямую, WhatsApp-канал
+    # берёт их по ссылке (Green API sendFileByUrl).
+    "qrcode.jpeg": Path(__file__).resolve().parent.parent / "assets" / "qrcode.jpeg",
+    "instructia.jpeg": Path(__file__).resolve().parent.parent / "assets" / "instructia.jpeg",
 }
 MAX_TRANSCRIPTION_BYTES = 20 * 1024 * 1024
 
