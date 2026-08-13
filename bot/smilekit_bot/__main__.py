@@ -520,6 +520,9 @@ async def main() -> None:
             receipt_file_id,
             str(payment.get("receipt_kind") or "image"),
         )
+        receipt_url = await telegram_file_url(receipt_file_id)
+        if receipt_url:
+            await crm.attach_receipt(chat_id, receipt_url)
         await message.answer(templates.THANK_YOU_ORDER)
         storage.log_event(
             chat_id, "info", "order", "order.completed",
@@ -566,6 +569,15 @@ async def main() -> None:
             await message.answer(RATE_LIMIT_TEXT)
             return False
         return True
+
+    async def telegram_file_url(file_id: str) -> str | None:
+        """Публичная ссылка на файл Telegram — тем же токеном, что download().
+        Не требует скачивания байтов: CRM просто хранит ссылку рядом с
+        заказом (см. attach_receipt), сам файл остаётся на серверах Telegram."""
+        telegram_file = await bot.get_file(file_id)
+        if not telegram_file.file_path:
+            return None
+        return f"https://api.telegram.org/file/bot{settings.telegram_bot_token.get_secret_value()}/{telegram_file.file_path}"
 
     async def download(file_id: str) -> bytes:
         telegram_file = await bot.get_file(file_id)
@@ -1069,6 +1081,9 @@ async def main() -> None:
         else:
             storage.cancel_nudge_follow_ups(chat_id)
             await push_receipt_mismatch_to_delivery_group(pending, file_id, kind, result, today)
+            receipt_url = await telegram_file_url(file_id)
+            if receipt_url:
+                await crm.attach_receipt(chat_id, receipt_url)
             storage.log_event(
                 chat_id, "warn", "order", "order.receipt_mismatch",
                 "Чек не прошёл проверку; клиенту сообщение не отправлено", result,

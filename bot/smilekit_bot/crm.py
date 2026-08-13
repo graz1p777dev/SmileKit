@@ -33,6 +33,7 @@ LOGGER = logging.getLogger(__name__)
 NON_STANDARD_REQUEST_STAGE = "non_standard_request"
 
 ORDER_PATH = "/api/internal/orders"
+ORDER_RECEIPT_PATH = "/api/internal/orders/attach-receipt"
 DEALS_PATH = "/api/internal/deals"
 NOTIFY_PATH = "/api/internal/notify"
 REQUEST_TIMEOUT = 10.0
@@ -233,6 +234,22 @@ class CrmClient:
             LOGGER.exception("CRM order delivery failed for %s", payload.get("externalKey"))
             return False
         LOGGER.info("Order %s delivered to CRM", payload.get("externalKey"))
+        return True
+
+    async def attach_receipt(self, telegram_chat_id: int, media_url: str) -> bool:
+        """Прикрепляет ссылку на чек к последнему заказу этого чата в CRM —
+        менеджер видит его прямо в карточке заказа/сделки, а не только в
+        группе доставки. Никогда не бросает исключение наружу."""
+        if not self.enabled:
+            return False
+        try:
+            await asyncio.to_thread(
+                self._request, "POST", ORDER_RECEIPT_PATH,
+                {"telegramChatId": telegram_chat_id, "mediaUrl": media_url},
+            )
+        except Exception:
+            LOGGER.exception("CRM receipt attach failed for chat=%s", telegram_chat_id)
+            return False
         return True
 
     async def create_deal(self, payload: dict) -> bool:
