@@ -503,19 +503,36 @@ class SmilekitAssistant:
     async def _gemini_generate(self, parts: list[dict], *, response_schema: dict | None = None) -> str:
         """Вызывает Gemini generateContent, возвращает текст первого кандидата.
         Бросает исключение при сбое — вызывающий код сам решает, что подставить
-        вместо ответа (verify_receipt подставляет отказ, транскрибация — ошибку)."""
+        вместо ответа (verify_receipt подставляет отказ, транскрибация — ошибку).
+        503 (перегрузка на стороне Google, обычное дело у Gemini) — 2 ретрая
+        с паузой, остальные ошибки бросаются сразу."""
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model}:generateContent"
         payload: dict = {"contents": [{"role": "user", "parts": parts}]}
         if response_schema:
             payload["generationConfig"] = {"responseMimeType": "application/json", "responseSchema": response_schema}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url, params={"key": self.gemini_api_key}, json=payload,
-                timeout=aiohttp.ClientTimeout(total=RECEIPT_CHECK_TIMEOUT_SECONDS),
-            ) as response:
-                response.raise_for_status()
-                data = await response.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        last_error: Exception | None = None
+        for attempt in range(3):
+            if attempt:
+                await asyncio.sleep(1.5 * attempt)
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        url, params={"key": self.gemini_api_key}, json=payload,
+                        timeout=aiohttp.ClientTimeout(total=RECEIPT_CHECK_TIMEOUT_SECONDS),
+                    ) as response:
+                        if response.status == 503:
+                            last_error = aiohttp.ClientResponseError(
+                                response.request_info, response.history, status=503, message="overloaded"
+                            )
+                            continue
+                        response.raise_for_status()
+                        data = await response.json()
+                        return data["candidates"][0]["content"]["parts"][0]["text"]
+            except aiohttp.ClientResponseError as error:
+                if error.status != 503:
+                    raise
+                last_error = error
+        raise last_error or RuntimeError("Gemini generateContent failed after retries")
 
     def _verify_receipt(self, file_data_url: str, today: str, kind: str) -> dict:
         file_content = (

@@ -17,7 +17,11 @@ class Settings(BaseSettings):
     # Проверка чеков (vision) и транскрибация голосовых. Пустой ключ = Gemini
     # выключен, оба сценария идут на OpenAI (openai_api_key/transcription_model).
     gemini_api_key: SecretStr = SecretStr("")
-    gemini_model: str = "gemini-2.5-flash"
+    # "latest"-алиас, а не конкретная версия: pinned gemini-2.5-flash отдавал
+    # 404 "no longer available to new users" на этом ключе (несмотря на то,
+    # что models.list его перечисляет) — алиас сам указывает на актуальную
+    # доступную версию (сейчас резолвится в gemini-3.7-flash).
+    gemini_model: str = "gemini-flash-latest"
     database_path: str = "data/smilekit.db"
     rate_limit_per_minute: int = 10
     max_voice_seconds: int = 180
