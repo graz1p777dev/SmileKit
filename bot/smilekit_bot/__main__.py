@@ -169,6 +169,8 @@ async def main() -> None:
         deepseek_api_key=settings.deepseek_api_key.get_secret_value() or None,
         deepseek_model=settings.deepseek_model,
         deepseek_base_url=settings.deepseek_base_url,
+        gemini_api_key=settings.gemini_api_key.get_secret_value() or None,
+        gemini_model=settings.gemini_model,
     )
     storage = BotStorage(settings.database_path)
     crm = CrmClient(

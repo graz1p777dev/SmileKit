@@ -1,9 +1,11 @@
 import asyncio
+import base64
 import io
 import json
 import logging
 from pathlib import Path
 
+import aiohttp
 from openai import OpenAI
 
 from .models import AssistantReply, ChatMessage, CrmAction, SupervisorResult
@@ -238,20 +240,26 @@ class SmilekitAssistant:
         deepseek_model: str = "deepseek-v4-flash",
         deepseek_base_url: str = "https://api.deepseek.com",
         deepseek_client: OpenAI | None = None,
+        gemini_api_key: str | None = None,
+        gemini_model: str = "gemini-2.5-flash",
     ) -> None:
         self.model = model
         self.client = client or OpenAI(api_key=api_key)
         path = knowledge_path or Path(__file__).resolve().parent.parent / "knowledge_base.md"
         self.knowledge = path.read_text(encoding="utf-8")
         # Черновик/ревью/роутер — чистый текст, уходят в DeepSeek (дешевле,
-        # DeepSeek OpenAI-совместим на /chat/completions). Фото чеков и
-        # голосовые остаются на self.client (OpenAI) — DeepSeek не умеет
-        # vision и транскрибацию аудио. Без ключа DeepSeek выключен, текст
-        # идёт на self.client как раньше (deepseek_client остаётся None).
+        # DeepSeek OpenAI-совместим на /chat/completions). Без ключа DeepSeek
+        # выключен, текст идёт на self.client как раньше (deepseek_client
+        # остаётся None).
         self.deepseek_model = deepseek_model
         self.deepseek_client = deepseek_client or (
             OpenAI(api_key=deepseek_api_key, base_url=deepseek_base_url) if deepseek_api_key else None
         )
+        # Фото чеков (vision) и голосовые (транскрибация) — на Gemini, если
+        # ключ задан: умеет оба сценария, дешевле OpenAI. Без ключа оба
+        # остаются на self.client (OpenAI), как раньше.
+        self.gemini_api_key = gemini_api_key
+        self.gemini_model = gemini_model
 
     async def reply(
         self,
@@ -451,6 +459,11 @@ class SmilekitAssistant:
         чек ещё раз, а не пропускает оплату молча.
         """
         try:
+            if self.gemini_api_key:
+                return await asyncio.wait_for(
+                    self._verify_receipt_gemini(file_data_url, today, kind),
+                    timeout=RECEIPT_CHECK_TIMEOUT_SECONDS,
+                )
             return await asyncio.wait_for(
                 asyncio.to_thread(self._verify_receipt, file_data_url, today, kind),
                 timeout=RECEIPT_CHECK_TIMEOUT_SECONDS,
@@ -458,6 +471,51 @@ class SmilekitAssistant:
         except Exception:
             LOGGER.exception("Receipt verification failed")
             return dict(self._RECEIPT_FAILURE)
+
+    async def _verify_receipt_gemini(self, file_data_url: str, today: str, kind: str) -> dict:
+        header, _, encoded = file_data_url.partition(",")
+        mime = header.split(":", 1)[1].split(";", 1)[0] if ":" in header else (
+            "application/pdf" if kind == "pdf" else "image/jpeg"
+        )
+        schema = {
+            "type": "OBJECT",
+            "properties": {
+                "is_real_receipt_screenshot": {"type": "BOOLEAN"},
+                "amount_ok": {"type": "BOOLEAN"},
+                "recipient_ok": {"type": "BOOLEAN"},
+                "date_ok": {"type": "BOOLEAN"},
+            },
+            "required": ["is_real_receipt_screenshot", "amount_ok", "recipient_ok", "date_ok"],
+        }
+        parts = [
+            {"text": f"{RECEIPT_CHECK_PROMPT}\n\nСегодняшняя дата: {today}."},
+            {"inline_data": {"mime_type": mime, "data": encoded}},
+        ]
+        data = await self._gemini_generate(parts, response_schema=schema)
+        result = json.loads(data)
+        return {
+            "is_real_receipt_screenshot": bool(result.get("is_real_receipt_screenshot")),
+            "amount_ok": bool(result.get("amount_ok")),
+            "recipient_ok": bool(result.get("recipient_ok")),
+            "date_ok": bool(result.get("date_ok")),
+        }
+
+    async def _gemini_generate(self, parts: list[dict], *, response_schema: dict | None = None) -> str:
+        """Вызывает Gemini generateContent, возвращает текст первого кандидата.
+        Бросает исключение при сбое — вызывающий код сам решает, что подставить
+        вместо ответа (verify_receipt подставляет отказ, транскрибация — ошибку)."""
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model}:generateContent"
+        payload: dict = {"contents": [{"role": "user", "parts": parts}]}
+        if response_schema:
+            payload["generationConfig"] = {"responseMimeType": "application/json", "responseSchema": response_schema}
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url, params={"key": self.gemini_api_key}, json=payload,
+                timeout=aiohttp.ClientTimeout(total=RECEIPT_CHECK_TIMEOUT_SECONDS),
+            ) as response:
+                response.raise_for_status()
+                data = await response.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
 
     def _verify_receipt(self, file_data_url: str, today: str, kind: str) -> dict:
         file_content = (
@@ -499,10 +557,33 @@ class SmilekitAssistant:
                 break
         return dict(self._RECEIPT_FAILURE)
 
+    _GEMINI_AUDIO_MIME = {
+        "ogg": "audio/ogg", "oga": "audio/ogg", "mp3": "audio/mp3", "m4a": "audio/mp4",
+        "mp4": "audio/mp4", "wav": "audio/wav", "aac": "audio/aac", "flac": "audio/flac",
+    }
+
     async def transcribe(
         self, audio: bytes, filename: str, model: str = "gpt-transcribe"
     ) -> str:
+        if self.gemini_api_key:
+            return await self._transcribe_gemini(audio, filename)
         return await asyncio.to_thread(self._transcribe, audio, filename, model)
+
+    async def _transcribe_gemini(self, audio: bytes, filename: str) -> str:
+        extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else "ogg"
+        mime = self._GEMINI_AUDIO_MIME.get(extension, "audio/ogg")
+        parts = [
+            {"text": (
+                "Расшифруй это голосовое сообщение дословно. Ответь ТОЛЬКО текстом "
+                "расшифровки, без вводных фраз, кавычек и комментариев. Язык — русский "
+                "или кыргызский, определи по речи."
+            )},
+            {"inline_data": {"mime_type": mime, "data": base64.b64encode(audio).decode("ascii")}},
+        ]
+        text = (await self._gemini_generate(parts)).strip()
+        if not text:
+            raise RuntimeError("Gemini returned an empty transcription")
+        return text
 
     def _transcribe(self, audio: bytes, filename: str, model: str) -> str:
         stream = io.BytesIO(audio)
