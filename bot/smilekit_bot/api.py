@@ -35,6 +35,9 @@ VOICE_ASSETS = {
 RESULT_ASSETS = {
     "before.jpg": Path(__file__).resolve().parent.parent / "assets" / "results" / "before.jpg",
     "after.jpg": Path(__file__).resolve().parent.parent / "assets" / "results" / "after.jpg",
+    # Склеенное фото «до/после» в одном кадре — WhatsApp-канал шлёт им вместо
+    # двух отдельных фото (see bot-reply.ts RESULT_PHOTOS).
+    "before_after.jpg": Path(__file__).resolve().parent.parent / "assets" / "results" / "before_after.jpg",
     # Тот же набор, что уходит альбомом в Telegram (media.result_photo_group)
     # — WhatsApp-канал берёт эти файлы по ссылке.
     "resultotzyv.jpeg": Path(__file__).resolve().parent.parent / "assets" / "results" / "resultotzyv.jpeg",
