@@ -73,8 +73,10 @@ ROUTED_TEMPLATES = {
     "safety_composition": templates.SAFETY_COMPOSITION,
     "single_piece_purchase": templates.SINGLE_PIECE_POLICY,
     "discount_offer": templates.DISCOUNT_OFFER,
-    # Не выдаётся роутером напрямую — только вторым шагом торга, см. ниже.
+    # Не выдаются роутером напрямую — только вторым/третьим шагом торга,
+    # см. эскалацию по storage.claim_event ниже.
     "discount_offer_final": templates.DISCOUNT_OFFER_FINAL,
+    "discount_reject": templates.DISCOUNT_REJECT,
     "usage_instructions": templates.USAGE_INSTRUCTIONS,
     "braces_compatibility": templates.BRACES_REPLY,
     "result_doubt": templates.DOUBT_RESULT_REPLY,
@@ -828,11 +830,12 @@ async def main() -> None:
             template_id = await assistant.route(text, history, model=current_settings["model"])
             if template_id == "discount_offer" and not storage.claim_event(chat_id, "discount_offered"):
                 # 13% уже предлагали. Вторая просьба — последняя уступка, 20%;
-                # дальше скидок нет, разговор ведёт обычная генерация.
+                # третья и далее — фиксированный отказ (id решает код по
+                # счётчику уступок, а не ИИ своим текстом).
                 template_id = (
                     "discount_offer_final"
                     if storage.claim_event(chat_id, "discount_offered_final")
-                    else None
+                    else "discount_reject"
                 )
             template_text = ROUTED_TEMPLATES.get(template_id)
             if template_text:
