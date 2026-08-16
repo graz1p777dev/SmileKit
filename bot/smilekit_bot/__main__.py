@@ -939,7 +939,11 @@ async def main() -> None:
         storage.log_event(
             chat_id, "info", "reply", "reply.ai_generated",
             "ИИ сгенерировал и отправил ответ",
-            {"parts": len(parts), "reviewStatus": reply.supervisor.status},
+            {
+                "parts": len(parts),
+                "reviewStatus": reply.supervisor.status,
+                "expectedClientReply": reply.supervisor.expected_client_reply,
+            },
         )
         stored_reply = "\n\n".join(parts)
         storage.add_exchange(

@@ -178,6 +178,7 @@ _SUPERVISOR_JSON_HINT = """
   "crm_action": {"stage": "строка", "tags": ["строка", ...], "note": "строка"},
   "customer_memory": "строка",
   "order_summary": "строка",
+  "expected_client_reply": "строка: к чему относится короткое да/давайте клиента, если он ответит так на ПОСЛЕДНЕЕ сообщение бота — пусто, если бот не делал предложения/вопроса",
   "order": {
     "quantity": число или null,
     "total_amount": число или null,
@@ -220,6 +221,7 @@ def _restore_supervisor_pii(result: SupervisorResult, mapping: dict[str, str]) -
     result.handoff_reason = restore_mapping(result.handoff_reason, mapping) or ""
     result.customer_memory = restore_mapping(result.customer_memory, mapping) or ""
     result.order_summary = restore_mapping(result.order_summary, mapping) or ""
+    result.expected_client_reply = restore_mapping(result.expected_client_reply, mapping) or ""
     result.crm_action.note = restore_mapping(result.crm_action.note, mapping) or ""
     result.issues = [restore_mapping(issue, mapping) or issue for issue in result.issues]
     result.order.contact_phone = restore_mapping(result.order.contact_phone, mapping)

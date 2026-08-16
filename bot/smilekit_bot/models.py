@@ -41,6 +41,11 @@ class SupervisorResult(BaseModel):
     customer_memory: str = ""
     order_summary: str = ""
     order: OrderDetails = Field(default_factory=OrderDetails)
+    # Короткая заметка себе же: к чему относится короткое "да/давайте" клиента,
+    # если он ответит именно так на ПОСЛЕДНЕЕ сообщение бота — подставляется в
+    # следующий вызов (см. МЕНЕДЖЕР/history), чтобы модель не путала короткое
+    # согласие с более ранней темой диалога (например, заказ вместо состава).
+    expected_client_reply: str = ""
 
 
 class AssistantReply(BaseModel):
