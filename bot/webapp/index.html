@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#F4F0FE">
+<title>Моя программа SmileKit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Unbounded:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/app/app.css?v=20260820">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+
+<!-- Аврора: три мягких пятна за стеклом. Живое движение делает
+     backdrop-filter видимым — на статичном фоне стекло читается как
+     обычная полупрозрачная плашка. -->
+<div class="aurora" aria-hidden="true">
+  <span class="aurora__blob aurora__blob--1"></span>
+  <span class="aurora__blob aurora__blob--2"></span>
+  <span class="aurora__blob aurora__blob--3"></span>
+</div>
+<div class="grain" aria-hidden="true"></div>
+
+<div class="boot" id="boot">
+  <div class="boot__mark"></div>
+  <p class="boot__text">Открываем программу…</p>
+</div>
+
+<main class="app" id="app" hidden>
+  <section class="screen" id="screen-today" data-tab="today"></section>
+  <section class="screen" id="screen-progress" data-tab="progress" hidden></section>
+  <section class="screen" id="screen-learn" data-tab="learn" hidden></section>
+  <section class="screen" id="screen-ask" data-tab="ask" hidden></section>
+  <section class="screen" id="screen-profile" data-tab="profile" hidden></section>
+</main>
+
+<nav class="tabbar glass" id="tabbar" hidden>
+  <button class="tab is-active" data-goto="today">
+    <span class="tab__icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.6c2 0 2.6-1 4.4-1 2.4 0 4.1 1.9 4.1 4.7 0 4.4-2.4 8.3-3.6 10.2-.7 1-1.4 1.9-2.4 1.9-1.1 0-1.5-.9-2.5-.9s-1.4.9-2.5.9c-1 0-1.7-.9-2.4-1.9C5.4 15.6 3 11.7 3 7.3 3 4.5 4.7 2.6 7.1 2.6c1.8 0 2.9 1 4.9 1Z"/></svg>
+    </span>
+    <span class="tab__label">Сегодня</span>
+  </button>
+  <button class="tab" data-goto="progress">
+    <span class="tab__icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16" rx="3.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/><path d="m8.5 14.5 2.2 2.2 4.3-4.6"/></svg>
+    </span>
+    <span class="tab__label">Прогресс</span>
+  </button>
+  <button class="tab" data-goto="learn">
+    <span class="tab__icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4.8h5.2A2.8 2.8 0 0 1 12 7.6v12a2.4 2.4 0 0 0-2.4-2.4H4Z"/><path d="M20 4.8h-5.2A2.8 2.8 0 0 0 12 7.6v12a2.4 2.4 0 0 1 2.4-2.4H20Z"/></svg>
+    </span>
+    <span class="tab__label">Узнать</span>
+  </button>
+  <button class="tab" data-goto="ask">
+    <span class="tab__icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 11.4c0 4.2-3.8 7.6-8.5 7.6-1 0-2-.2-2.9-.5L4 20l1.4-3.6C4.2 15.1 3.5 13.3 3.5 11.4 3.5 7.2 7.3 3.8 12 3.8s8.5 3.4 8.5 7.6Z"/><path d="M12 13.4v-.5c0-1 1.7-1.2 1.7-2.6 0-.9-.7-1.6-1.7-1.6s-1.7.6-1.8 1.5"/><path d="M12 15.6h.01"/></svg>
+    </span>
+    <span class="tab__label">Спросить</span>
+  </button>
+  <button class="tab" data-goto="profile">
+    <span class="tab__icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8.3" r="3.8"/><path d="M4.6 20.2c.6-3.6 3.7-5.7 7.4-5.7s6.8 2.1 7.4 5.7"/></svg>
+    </span>
+    <span class="tab__label">Профиль</span>
+  </button>
+  <span class="tab__pill" id="tabPill" aria-hidden="true"></span>
+</nav>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet__scrim" data-close-sheet></div>
+  <div class="sheet__panel glass" role="dialog" aria-modal="true">
+    <button class="sheet__close" data-close-sheet aria-label="Закрыть">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>
+    </button>
+    <div class="sheet__body" id="sheetBody"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status"></div>
+<canvas class="confetti" id="confetti" hidden aria-hidden="true"></canvas>
+
+<script type="module" src="/app/app.js?v=20260820"></script>
+</body>
+</html>

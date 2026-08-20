@@ -10,7 +10,13 @@ from openai import OpenAI
 
 from .models import AssistantReply, ChatMessage, CrmAction, SupervisorResult
 from .privacy import apply_mapping, build_mapping, restore_mapping
-from .prompts import MANAGER_PROMPT, SUPERVISOR_PROMPT
+from .prompts import (
+    DENTAL_ASSISTANT_PROMPT,
+    MANAGER_PROMPT,
+    ONBOARDING_PLAN_PROMPT,
+    ONBOARDING_PROMPT,
+    SUPERVISOR_PROMPT,
+)
 
 
 FALLBACK_TEXT = (
@@ -21,6 +27,7 @@ DRAFT_TIMEOUT_SECONDS = 20
 REVIEW_TIMEOUT_SECONDS = 15
 ROUTE_TIMEOUT_SECONDS = 8
 RECEIPT_CHECK_TIMEOUT_SECONDS = 20
+DENTAL_TIMEOUT_SECONDS = 25
 
 # Получатель на QR и минимальная сумма — фиксированные факты о текущем
 # QR-коде магазина, не про конкретный заказ. Если QR сменится — поменять
@@ -580,6 +587,140 @@ class SmilekitAssistant:
         "ogg": "audio/ogg", "oga": "audio/ogg", "mp3": "audio/mp3", "m4a": "audio/mp4",
         "mp4": "audio/mp4", "wav": "audio/wav", "aac": "audio/aac", "flac": "audio/flac",
     }
+
+    async def dental_answer(
+        self, question: str, history: list[dict], context: str
+    ) -> str:
+        """Ответ ИИ-консультанта Mini App: только зубы, улыбка и SmileKit.
+
+        Отдельный вход, а не reply(): там менеджер продаёт коробку и тянет за
+        собой торг, дожимы и разбор заказа. Здесь клиент уже купил, ему нужен
+        короткий ответ по делу, поэтому и промпт, и путь свои.
+        """
+        mapping = build_mapping(question, *(item.get("content", "") for item in history))
+        redacted_history = [
+            {"role": item["role"], "content": apply_mapping(item.get("content", ""), mapping)}
+            for item in history[-8:]
+        ]
+        answer = await asyncio.wait_for(
+            asyncio.to_thread(
+                self._dental_answer,
+                apply_mapping(question, mapping),
+                redacted_history,
+                context,
+            ),
+            timeout=DENTAL_TIMEOUT_SECONDS,
+        )
+        return restore_mapping(answer, mapping)
+
+    def _dental_answer(self, question: str, history: list[dict], context: str) -> str:
+        instructions = (
+            f"{DENTAL_ASSISTANT_PROMPT}\n\nБАЗА ЗНАНИЙ:\n{self.knowledge}\n\n"
+            f"КОНТЕКСТ КЛИЕНТА:\n{context}"
+        )
+        if self.deepseek_client:
+            response = self.deepseek_client.chat.completions.create(
+                model=self.deepseek_model,
+                messages=[
+                    {"role": "system", "content": instructions},
+                    *history,
+                    {"role": "user", "content": question},
+                ],
+                temperature=0.3,
+                max_tokens=500,
+                # См. _route_deepseek: у V4 thinking включён по умолчанию и
+                # успевает съесть весь max_tokens до финального content.
+                extra_body={"thinking": {"type": "disabled"}},
+            )
+            text = (response.choices[0].message.content or "").strip()
+        else:
+            response = self.client.responses.create(
+                model=self.model,
+                reasoning={"effort": "low"},
+                text={"verbosity": "low"},
+                instructions=instructions,
+                input=[*history, {"role": "user", "content": question}],
+                store=False,
+            )
+            text = response.output_text.strip()
+        if not text:
+            raise RuntimeError("Dental assistant returned an empty answer")
+        return text
+
+    async def onboarding_turn(
+        self, question: str, options: list[dict], answer: str
+    ) -> dict:
+        """{"value": <ключ варианта или None>, "ack": <реакция>} по свободному
+        ответу клиента. Никогда не бросает наружу: онбординг не должен падать
+        из-за модели — при сбое приложение показывает варианты кнопками."""
+        allowed = {option["value"] for option in options}
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(self._onboarding_turn, question, options, answer),
+                timeout=DENTAL_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            LOGGER.exception("Onboarding turn failed")
+            return {"value": None, "ack": ""}
+        value = result.get("value")
+        return {
+            "value": value if value in allowed else None,
+            "ack": str(result.get("ack") or "").strip(),
+        }
+
+    def _onboarding_turn(self, question: str, options: list[dict], answer: str) -> dict:
+        catalogue = "\n".join(
+            f"- {option['value']}: {option['label']}" for option in options
+        )
+        payload = f"ВОПРОС:\n{question}\n\nВАРИАНТЫ:\n{catalogue}\n\nОТВЕТ КЛИЕНТА:\n{answer}"
+        instructions = f"{ONBOARDING_PROMPT}\n\nБАЗА ЗНАНИЙ:\n{self.knowledge}"
+        return self._json_turn(instructions, payload, max_tokens=300)
+
+    async def onboarding_plan(self, summary: str) -> str:
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._json_turn,
+                    f"{ONBOARDING_PLAN_PROMPT}\n\nБАЗА ЗНАНИЙ:\n{self.knowledge}",
+                    summary,
+                    300,
+                ),
+                timeout=DENTAL_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            LOGGER.exception("Onboarding plan failed")
+            return ""
+        return str(result.get("plan") or "").strip()
+
+    def _json_turn(self, instructions: str, payload: str, max_tokens: int) -> dict:
+        """Один синхронный вызов с JSON-ответом. DeepSeek, если он подключён
+        (эти шаги — чистый текст, ради них незачем идти в OpenAI)."""
+        if self.deepseek_client:
+            response = self.deepseek_client.chat.completions.create(
+                model=self.deepseek_model,
+                messages=[
+                    {"role": "system", "content": instructions},
+                    {"role": "user", "content": payload},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.6,
+                max_tokens=max_tokens,
+                # См. _route_deepseek: включённый по умолчанию thinking у V4
+                # съедает max_tokens до финального content.
+                extra_body={"thinking": {"type": "disabled"}},
+            )
+            content = response.choices[0].message.content or "{}"
+        else:
+            response = self.client.responses.create(
+                model=self.model,
+                reasoning={"effort": "low"},
+                text={"verbosity": "low"},
+                instructions=instructions,
+                input=[{"role": "user", "content": payload}],
+                store=False,
+            )
+            content = response.output_text or "{}"
+        return _parse_json_loose(content)
 
     async def transcribe(
         self, audio: bytes, filename: str, model: str = "gpt-transcribe"

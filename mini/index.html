@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smilekit — ссылки для бота</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Unbounded:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --purple: #5115A4;
+    --purple-deep: #360E7F;
+    --purple-soft: #8A68AD;
+    --ink: #17102A;
+    --ink-mid: #5C5169;
+    --line: rgba(81, 21, 164, .14);
+    --ease: cubic-bezier(.22, .68, .3, 1);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Manrope", system-ui, sans-serif;
+    color: var(--ink);
+    background: linear-gradient(180deg, #FAF9FD 0%, #F3EFFA 100%);
+    -webkit-font-smoothing: antialiased;
+  }
+  .shell { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+
+  .head {
+    padding: 48px 0 28px;
+    text-align: center;
+  }
+  .head__logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-family: "Unbounded", "Manrope", sans-serif;
+    font-weight: 500;
+    font-size: 20px;
+    letter-spacing: -.04em;
+    color: var(--purple-deep);
+    text-decoration: none;
+  }
+  .head__logo::before {
+    content: "";
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--purple-soft), var(--purple));
+  }
+  h1 {
+    margin: 22px 0 10px;
+    font-size: clamp(24px, 3.6vw, 34px);
+    font-weight: 800;
+    letter-spacing: -.02em;
+    color: var(--purple-deep);
+  }
+  .head p {
+    margin: 0 auto;
+    max-width: 560px;
+    color: var(--ink-mid);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 22px;
+    padding: 20px 0 70px;
+  }
+
+  .card {
+    display: flex;
+    flex-direction: column;
+    border-radius: 16px;
+    background: #fff;
+    border: 1px solid var(--line);
+    box-shadow: 0 18px 40px -26px rgba(54, 14, 127, .35);
+    overflow: hidden;
+    transition: transform .35s var(--ease), box-shadow .35s var(--ease), border-color .35s var(--ease);
+  }
+  .card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 26px 54px -26px rgba(54, 14, 127, .5);
+  }
+  .card.is-copied { border-color: var(--purple); }
+
+  .card__frame {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1440 / 900;
+    overflow: hidden;
+    background: #F3EFFA;
+    cursor: pointer;
+  }
+  .card__frame iframe {
+    position: absolute;
+    top: 0; left: 0;
+    width: 1440px;
+    height: 900px;
+    border: 0;
+    pointer-events: none;
+    transform-origin: top left;
+    /* масштаб задаётся в JS от фактической ширины карточки — так превью
+       остаётся резким на любом экране вместо фиксированного transform: scale() */
+  }
+  .card__frame::after {
+    /* лёгкая рамка поверх iframe — маскирует полосу прокрутки браузера внутри превью */
+    content: "";
+    position: absolute;
+    inset: 0;
+    box-shadow: inset 0 0 0 1px rgba(81, 21, 164, .06);
+    pointer-events: none;
+  }
+
+  .card__body {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 13px 15px;
+  }
+  .card__label {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  .card__hint {
+    display: block;
+    margin-top: 2px;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--ink-mid);
+  }
+
+  .card__actions { display: flex; gap: 6px; flex: 0 0 auto; }
+
+  .icon-btn {
+    display: grid;
+    place-items: center;
+    width: 32px; height: 32px;
+    border-radius: 9px;
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--purple);
+    cursor: pointer;
+    transition: background .25s var(--ease), color .25s var(--ease), transform .25s var(--ease);
+  }
+  .icon-btn:hover { background: var(--purple); color: #fff; transform: translateY(-1px); }
+  .icon-btn svg { width: 15px; height: 15px; }
+  .icon-btn.is-copied { background: var(--purple); color: #fff; }
+
+  .foot {
+    padding: 26px 0 60px;
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--ink-mid);
+  }
+  .foot a { color: var(--purple); }
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    transform: translate(-50%, 16px);
+    padding: 12px 20px;
+    border-radius: 999px;
+    background: var(--purple-deep);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    box-shadow: 0 18px 40px -14px rgba(54, 14, 127, .6);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .3s var(--ease), transform .3s var(--ease);
+    z-index: 20;
+  }
+  .toast.is-visible { opacity: 1; transform: translate(-50%, 0); }
+
+  @media (max-width: 980px) {
+    .grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 560px) {
+    .grid { grid-template-columns: 1fr; gap: 18px; padding-bottom: 50px; }
+    .head { padding: 34px 0 20px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="head shell">
+  <a class="head__logo" href="/">smilekit</a>
+  <h1>Ссылки для бота</h1>
+  <p>Нажмите на нужный экран — ссылка на него скопируется в буфер. Отправьте её клиенту в чате: сайт откроется сразу на этом месте, без прокрутки.</p>
+</header>
+
+<main class="shell">
+  <div class="grid" id="grid"></div>
+</main>
+
+<p class="foot shell">Превью — уменьшенная копия <a href="/">живого сайта</a>, обновляется вместе с ним.</p>
+
+<div class="toast" id="toast">Ссылка скопирована</div>
+
+<script>
+  // Точки входа: id — якорь на главном сайте, label/hint — подпись карточки.
+  var SECTIONS = [
+    { id: '',          label: 'Главный экран',   hint: 'Hero + УТП' },
+    { id: 'benefits',  label: 'Преимущества',    hint: '4 пункта' },
+    { id: 'about',     label: 'О продукте',      hint: 'Состав, halal' },
+    { id: 'how',       label: 'Как это работает',hint: '4 шага' },
+    { id: 'results',   label: 'Результаты',      hint: 'До / после' },
+    { id: 'reviews',   label: 'Отзывы',          hint: 'Переписки' },
+    { id: 'faq',       label: 'Вопросы',         hint: 'FAQ' },
+    { id: 'order',     label: 'Заказ',           hint: 'CTA + контакты' },
+  ]
+
+  var ORIGIN = location.origin
+  var grid = document.getElementById('grid')
+  var toast = document.getElementById('toast')
+  var toastTimer = null
+
+  function showToast(text) {
+    toast.textContent = text
+    toast.classList.add('is-visible')
+    clearTimeout(toastTimer)
+    toastTimer = setTimeout(function () { toast.classList.remove('is-visible') }, 1800)
+  }
+
+  function copy(text, onDone) {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(onDone, function () { fallbackCopy(text, onDone) })
+    } else {
+      fallbackCopy(text, onDone)
+    }
+  }
+
+  function fallbackCopy(text, onDone) {
+    var ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    try { document.execCommand('copy') } catch (e) {}
+    document.body.removeChild(ta)
+    onDone()
+  }
+
+  function scaleFrame(iframe, card) {
+    var apply = function () {
+      var scale = card.getBoundingClientRect().width / 1440
+      iframe.style.transform = 'scale(' + scale + ')'
+    }
+    apply()
+    new ResizeObserver(apply).observe(card)
+  }
+
+  // Внутри самого сайта якорь ловится через свой скрипт, но у фонового
+  // (loading="lazy") iframe таймеры сильно замедляются браузером, и его
+  // собственная коррекция может не успеть. Досылаем скролл снаружи —
+  // с родительской страницы это отрабатывает сразу и без задержек.
+  function settleFrame(iframe, hash) {
+    if (!hash) return
+    var nudge = function () {
+      try {
+        var el = iframe.contentDocument.querySelector(hash)
+        if (el) el.scrollIntoView({ block: 'start', behavior: 'instant' })
+      } catch (e) {}
+    }
+    iframe.addEventListener('load', function () {
+      nudge()
+      setTimeout(nudge, 250)
+      setTimeout(nudge, 800)
+    })
+  }
+
+  SECTIONS.forEach(function (section) {
+    var url = ORIGIN + '/' + (section.id ? '#' + section.id : '')
+
+    var card = document.createElement('article')
+    card.className = 'card'
+
+    var frame = document.createElement('div')
+    frame.className = 'card__frame'
+    frame.title = 'Открыть похожим на то, что увидит клиент'
+
+    var iframe = document.createElement('iframe')
+    iframe.src = url
+    iframe.loading = 'lazy'
+    iframe.setAttribute('scrolling', 'no')
+    iframe.setAttribute('tabindex', '-1')
+    frame.appendChild(iframe)
+    scaleFrame(iframe, frame)
+    settleFrame(iframe, section.id ? '#' + section.id : null)
+
+    var body = document.createElement('div')
+    body.className = 'card__body'
+    body.innerHTML =
+      '<span><span class="card__label">' + section.label + '</span>' +
+      '<span class="card__hint">' + section.hint + '</span></span>'
+
+    var actions = document.createElement('div')
+    actions.className = 'card__actions'
+
+    var copyBtn = document.createElement('button')
+    copyBtn.className = 'icon-btn'
+    copyBtn.type = 'button'
+    copyBtn.title = 'Скопировать ссылку'
+    copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg>'
+
+    var openBtn = document.createElement('a')
+    openBtn.className = 'icon-btn'
+    openBtn.href = url
+    openBtn.target = '_blank'
+    openBtn.rel = 'noopener'
+    openBtn.title = 'Открыть в новой вкладке'
+    openBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></svg>'
+
+    var doCopy = function () {
+      copy(url, function () {
+        showToast('Ссылка скопирована: ' + section.label)
+        card.classList.add('is-copied')
+        copyBtn.classList.add('is-copied')
+        setTimeout(function () {
+          card.classList.remove('is-copied')
+          copyBtn.classList.remove('is-copied')
+        }, 1400)
+      })
+    }
+
+    copyBtn.addEventListener('click', doCopy)
+    frame.addEventListener('click', doCopy)
+
+    actions.append(copyBtn, openBtn)
+    body.appendChild(actions)
+    card.append(frame, body)
+    grid.appendChild(card)
+  })
+</script>
+</body>
+</html>

@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     # Telegram-группа доставщиков, куда бот шлёт оплаченный заказ с чеком.
     # 0 = группа регистрируется администратором командой /delivery_group.
     delivery_group_chat_id: int = 0
+    # Публичный HTTPS-адрес Mini App «Моя программа» (страница /app этого же
+    # сервиса, например https://smilekit-bot.up.railway.app/app). Telegram
+    # открывает Web App только по HTTPS, поэтому localhost сюда не годится.
+    # Пусто = кнопки приложения и напоминания по курсу выключены, бот работает
+    # ровно как раньше.
+    miniapp_url: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",

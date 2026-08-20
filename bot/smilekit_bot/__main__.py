@@ -10,11 +10,21 @@ from pathlib import Path
 from aiogram import BaseMiddleware, Bot, Dispatcher, F
 from aiogram.enums import ChatAction, ChatMemberStatus, ChatType
 from aiogram.filters import Command, CommandStart
-from aiogram.types import FSInputFile, Message
+from aiogram.types import (
+    BotCommand,
+    FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    MenuButtonWebApp,
+    Message,
+    WebAppInfo,
+)
 from aiohttp import web
 
 from .api import create_app, effective_settings
 from .config import Settings
+from .miniapp import current_day, next_reminder_due_at
+from .miniapp_store import COURSE_DAYS, PROCEDURE_DAYS, PROCEDURE_MINUTES
 from .crm import (
     NON_STANDARD_REQUEST_STAGE,
     REQUEST_TIMEOUT,
@@ -122,6 +132,33 @@ BISHKEK_UTC_OFFSET_SECONDS = 6 * 3600
 FOLLOWUP_CUTOFF_HOUR_BISHKEK = 19
 FOLLOWUP_SAME_DAY_SEND_HOUR_BISHKEK = 19.5
 FOLLOWUP_NEXT_DAY_SEND_HOUR_BISHKEK = 12
+# Mini App «Моя программа»: напоминания по курсу. Проверяем чаще, чем шлём —
+# час напоминания клиент задаёт сам в профиле, и попасть в него нужно точно.
+MINIAPP_REMINDER_CHECK_INTERVAL_SECONDS = 10 * 60
+
+
+def miniapp_reminder_text(day: int) -> str:
+    """Текст вечернего напоминания по дню курса."""
+    if day >= COURSE_DAYS:
+        return (
+            "🎉 Сегодня 14-й день SmileKit.\n"
+            "Загляни в программу — там уже ждёт сравнение «до и после»."
+        )
+    if day in PROCEDURE_DAYS:
+        return (
+            f"🦷 Пора уделить {PROCEDURE_MINUTES} минут своей улыбке.\n"
+            f"Сегодня день {day} из {COURSE_DAYS}."
+        )
+    return (
+        f"✨ Сегодня день ухода — процедуры нет.\n"
+        f"День {day} из {COURSE_DAYS}. Отметь два простых шага, чтобы серия не прервалась."
+    )
+
+
+def miniapp_reminder_button(day: int) -> str:
+    if day >= COURSE_DAYS:
+        return "Посмотреть результат"
+    return "Начать процедуру" if day in PROCEDURE_DAYS else "Открыть программу"
 
 
 class GroupSilenceMiddleware(BaseMiddleware):
@@ -1030,6 +1067,32 @@ async def main() -> None:
             storage.clear_chat(message.chat.id)
             await message.answer("Диалог и сохранённая память очищены.")
 
+    def miniapp_keyboard(label: str) -> InlineKeyboardMarkup | None:
+        if not settings.miniapp_url:
+            return None
+        return InlineKeyboardMarkup(
+            inline_keyboard=[[
+                InlineKeyboardButton(
+                    text=label, web_app=WebAppInfo(url=settings.miniapp_url)
+                )
+            ]]
+        )
+
+    @dp.message(Command("app"))
+    async def open_miniapp(message: Message) -> None:
+        if not settings.miniapp_url:
+            await message.answer(
+                "Приложение пока не подключено. Напишите нам — подскажем всё по курсу здесь, в чате."
+            )
+            return
+        await message.answer(
+            "💜 «Моя программа» — приложение SmileKit\n\n"
+            f"Курс на {COURSE_DAYS} дней: задача на сегодня, отметки процедур, "
+            "фото до и после, Smile Academy и ИИ-консультант по зубам.\n\n"
+            "Пройдёшь курс — откроется скидка на следующий набор.",
+            reply_markup=miniapp_keyboard("Открыть приложение"),
+        )
+
     @dp.message(Command("delivery_group"))
     async def configure_delivery_group(message: Message) -> None:
         if message.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
@@ -1271,9 +1334,70 @@ async def main() -> None:
     site = web.TCPSite(runner, host="0.0.0.0", port=settings.port)
     await site.start()
     logging.info("Internal HTTP API listening on port %s", settings.port)
+    app_store = api_app["app_store"]
+
+    async def check_miniapp_reminders() -> None:
+        """Вечернее напоминание по курсу тем, кто уже начал программу.
+
+        Отдельно от продающих дожимов: те ведут к покупке и останавливаются на
+        заказе, а это — сервисная часть курса для того, кто уже купил."""
+        while True:
+            await asyncio.sleep(MINIAPP_REMINDER_CHECK_INTERVAL_SECONDS)
+            now = time.time()
+            try:
+                due = app_store.due_reminders(now)
+            except Exception:
+                logging.exception("Mini App reminder scan failed")
+                continue
+            for row in due:
+                chat_id = row["chat_id"]
+                if storage.is_paused(chat_id):
+                    continue  # диалог ведёт менеджер — бот молчит полностью
+                user = app_store.get_user(chat_id)
+                check_ins = app_store.check_ins(chat_id)
+                day = current_day(user, now)
+                if day >= 1 and day not in check_ins:
+                    try:
+                        await bot.send_message(
+                            chat_id,
+                            miniapp_reminder_text(day),
+                            reply_markup=miniapp_keyboard(miniapp_reminder_button(day)),
+                        )
+                        storage.log_event(
+                            chat_id, "info", "miniapp", "miniapp.reminder_sent",
+                            f"Напоминание по курсу, день {day}",
+                        )
+                    except Exception:
+                        logging.exception("Mini App reminder failed chat=%s", chat_id)
+                next_due = next_reminder_due_at(user, check_ins, now)
+                if next_due is None:
+                    app_store.cancel_reminder(chat_id)
+                    continue
+                # Слот сегодняшнего дня уже прошёл — переносим на завтра, иначе
+                # запись осталась бы просроченной и срабатывала каждый цикл.
+                if next_due <= now:
+                    next_due += 86400
+                app_store.schedule_reminder(chat_id, next_due, day)
+
+    if settings.miniapp_url:
+        # Команды раньше кнопки меню: их регистрация возвращает кнопку к
+        # дефолтному типу "commands", и выставленная до этого web_app-кнопка
+        # молча терялась при каждом рестарте.
+        await bot.set_my_commands([
+            BotCommand(command="app", description="Моя программа SmileKit"),
+        ])
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="Программа", web_app=WebAppInfo(url=settings.miniapp_url)
+            )
+        )
+        logging.info("Mini App enabled at %s", settings.miniapp_url)
+    else:
+        logging.info("Mini App disabled: MINIAPP_URL not set")
 
     daily_nudge_task = asyncio.create_task(check_daily_nudges())
     nudge_follow_up_task = asyncio.create_task(check_nudge_follow_ups())
+    miniapp_reminder_task = asyncio.create_task(check_miniapp_reminders())
 
     try:
         await bot.delete_webhook(drop_pending_updates=False)
@@ -1281,6 +1405,7 @@ async def main() -> None:
     finally:
         daily_nudge_task.cancel()
         nudge_follow_up_task.cancel()
+        miniapp_reminder_task.cancel()
         for task in follow_up_tasks:
             task.cancel()
         for task in debounce_tasks.values():
@@ -1289,6 +1414,7 @@ async def main() -> None:
             # Заказ терять нельзя: даём отправке доехать до выхода.
             await asyncio.wait(crm_tasks, timeout=REQUEST_TIMEOUT)
         await runner.cleanup()
+        app_store.close()
         storage.close()
         await bot.session.close()
 

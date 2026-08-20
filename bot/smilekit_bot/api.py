@@ -19,6 +19,7 @@ from aiohttp import web
 from aiogram.types import BufferedInputFile
 
 from .config import Settings
+from .miniapp import setup_miniapp
 from .models import ChatMessage
 from .prompts import MANAGER_PROMPT, SUPERVISOR_PROMPT
 from .service import SmilekitAssistant
@@ -549,4 +550,7 @@ def create_app(
     app.router.add_post("/internal/chats/{chat_id}/message", post_chat_message_handler)
     app.router.add_post("/internal/chats/{chat_id}/broadcast", post_chat_broadcast_handler)
     app.router.add_get("/internal/events", get_events_handler)
+    # Mini App живёт под /app на том же порту и со своей авторизацией
+    # (подпись initData вместо сервисного токена CRM) — см. miniapp.py.
+    setup_miniapp(app, settings.database_path)
     return app
