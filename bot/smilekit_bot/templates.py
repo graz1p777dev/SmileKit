@@ -262,7 +262,12 @@ def delivery_template_for_city(text: str) -> str | None:
     """Шаблон доставки по упомянутому городу/стране. None — не распознан
     (например иностранный, не входящий в список ниже) или не назван вообще."""
     normalized = " ".join(text.lower().split())
-    if any(marker in normalized for marker in BISHKEK_MARKERS):
+    # Живой баг: опечатка «бищкека» (щ вместо ш) не совпадала с "бишкек" —
+    # клиент выпадал из готового сценария в свободный ответ ИИ, который сам
+    # придумывал вопрос вроде «вам удобно оформить заказ сейчас?» вместо
+    # утверждённого текста. Складываем щ→ш только для Бишкека/Токмока —
+    # самая частая опечатка на этих двух словах.
+    if any(marker in normalized.replace("щ", "ш") for marker in BISHKEK_MARKERS):
         return DELIVERY_BISHKEK
     if any(marker in normalized for marker in OTHER_KG_CITY_MARKERS):
         return DELIVERY_OTHER_KG

@@ -102,6 +102,9 @@ DEBOUNCE_SECONDS = 3.0
 # Клиент замолчал после ответа бота — не бросаем диалог: раз бот уже что-то
 # показал (эффект, цену), полчаса тишины — разумный порог "перестал отвечать".
 IDLE_NUDGE_DELAY_SECONDS = 30 * 60
+# CTA «Оформить вам?» после блока результата — не сразу, а после этого
+# молчания клиента (см. order_cta_follow_up).
+ORDER_CTA_DELAY_SECONDS = 5 * 60
 # Ежедневное напоминание про скидку — время дня якорится на первый контакт
 # (написал днём — рассылка днём). Останавливается, как только клиент
 # оформил заказ; ограничено, чтобы не превратиться в бесконечный спам.
@@ -262,6 +265,27 @@ async def main() -> None:
             sent = await bot.send_message(chat_id, templates.FIRST_USE_EFFECT)
         storage.add_operator_message(chat_id, sent.message_id, templates.FIRST_USE_EFFECT)
         storage.log_event(chat_id, "info", "nudge", "nudge.idle", "Напоминание об эффекте после простоя отправлено")
+
+    async def order_cta_follow_up(chat_id: int, message_id: int) -> None:
+        """CTA «Оформить вам? Пока есть в наличии.» — через 5 минут молчания
+        после блока результата (доставка -> фото -> голосовое), а не сразу
+        следующим сообщением: клиент не успевал даже дослушать голосовое,
+        как бот уже предлагал оформить. claim_event по message_id — тот же
+        приём, что idle_nudge."""
+        await asyncio.sleep(ORDER_CTA_DELAY_SECONDS)
+        if storage.is_paused(chat_id):
+            return  # диалог ведёт менеджер — бот молчит полностью
+        if storage.has_message_after(chat_id, message_id):
+            return
+        if storage.get_pending_payment(chat_id) is not None:
+            return  # уже ждём чек по QR — переспрашивать оформление не к месту
+        if not storage.claim_event(chat_id, f"order_cta:{message_id}"):
+            return
+        await bot.send_chat_action(chat_id, ChatAction.TYPING)
+        await asyncio.sleep(random.uniform(0.8, 1.3))
+        sent = await bot.send_message(chat_id, templates.ORDER_STOCK_CTA)
+        storage.add_operator_message(chat_id, sent.message_id, templates.ORDER_STOCK_CTA)
+        storage.log_event(chat_id, "info", "nudge", "nudge.order_cta", "CTA «оформить» отправлен после 5 минут тишины")
 
     async def check_daily_nudges() -> None:
         while True:
@@ -933,19 +957,18 @@ async def main() -> None:
             await bot.send_chat_action(chat_id, ChatAction.RECORD_VOICE)
             await asyncio.sleep(random.uniform(0.8, 1.3))
             await bot.send_voice(chat_id, FSInputFile(FIRST_USE_EFFECT_VOICE_PATH))
-            await bot.send_chat_action(chat_id, ChatAction.TYPING)
-            await asyncio.sleep(random.uniform(0.7, 1.1))
-            await message.answer(templates.ORDER_STOCK_CTA)
             stored_reply = "\n\n".join(filter(None, [
                 delivery_text,
                 "[фото до/после]",
                 "[голосовое: эффект после первого применения]",
-                templates.ORDER_STOCK_CTA,
             ]))
             storage.add_exchange(chat_id, message.message_id, text, stored_reply, kind)
             task = asyncio.create_task(follow_up_after_results(chat_id, message.message_id))
             follow_up_tasks.add(task)
             task.add_done_callback(follow_up_tasks.discard)
+            cta_task = asyncio.create_task(order_cta_follow_up(chat_id, message.message_id))
+            follow_up_tasks.add(cta_task)
+            cta_task.add_done_callback(follow_up_tasks.discard)
             schedule_idle_follow_up(chat_id, promised_hours)
             return
 
