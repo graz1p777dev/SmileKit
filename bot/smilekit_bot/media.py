@@ -99,18 +99,12 @@ def should_send_results_after_city(text: str, history: list[str]) -> bool:
     )
 
 
-def result_photo_group() -> list[InputMediaPhoto]:
-    # before.jpg + after.jpg склеены в один кадр (before_after.jpg, тот же
-    # файл, что уходит в WhatsApp-канале) — раньше уходили двумя отдельными
-    # фото подряд, что читалось как дубль одного и того же результата.
-    return [
-        InputMediaPhoto(
-            media=FSInputFile(RESULTS_DIR / "before_after.jpg"),
-        ),
-        InputMediaPhoto(
-            media=FSInputFile(RESULTS_DIR / "resultotzyv.jpeg"),
-        ),
-    ]
+def result_photo() -> FSInputFile:
+    """Одно фото до/после — before.jpg и after.jpg склеены в один кадр
+    (before_after.jpg, тот же файл, что уходит в WhatsApp-канале). Раньше это
+    был альбом (send_media_group) на 2–3 картинки — клиент видел то же самое
+    "до/после" продублированным несколько раз подряд вместо одного фото."""
+    return FSInputFile(RESULTS_DIR / "before_after.jpg")
 
 
 def review_photo_group() -> list[InputMediaPhoto]:

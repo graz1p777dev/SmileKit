@@ -36,7 +36,7 @@ from .crm import (
 from . import templates
 from .media import (
     confirms_review_offer,
-    result_photo_group,
+    result_photo,
     review_photo_group,
     should_send_results_after_city,
     wants_result_photos,
@@ -953,7 +953,7 @@ async def main() -> None:
                 await bot.send_chat_action(chat_id, ChatAction.TYPING)
                 await asyncio.sleep(random.uniform(0.7, 1.1))
             await message.answer("Вот результат нашего клиента до и после применения 👇")
-            await bot.send_media_group(chat_id, media=result_photo_group())
+            await bot.send_photo(chat_id, result_photo())
             await bot.send_chat_action(chat_id, ChatAction.RECORD_VOICE)
             await asyncio.sleep(random.uniform(0.8, 1.3))
             await bot.send_voice(chat_id, FSInputFile(FIRST_USE_EFFECT_VOICE_PATH))
@@ -1051,7 +1051,7 @@ async def main() -> None:
                 schedule_idle_follow_up(chat_id, promised_hours)
         if kind == "text" and wants_result_photos(text):
             await message.answer("Вот результат нашего клиента до и после применения 👇")
-            await bot.send_media_group(chat_id, media=result_photo_group())
+            await bot.send_photo(chat_id, result_photo())
             task = asyncio.create_task(
                 follow_up_after_results(chat_id, message.message_id)
             )
