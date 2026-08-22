@@ -75,15 +75,24 @@ def test_empty_init_data_is_rejected():
     assert miniapp.validate_init_data("", BOT_TOKEN) is None
 
 
-def test_signature_field_is_excluded_from_check():
-    """Telegram добавляет отдельное поле signature — оно не входит в подпись
-    HMAC, и без его отбрасывания валидный initData отклонялся бы."""
+def test_signature_field_is_included_in_check():
+    """Telegram добавляет отдельное поле signature (Ed25519, для сторонней
+    валидации без токена бота) — но в HMAC-проверке по токену бота исключается
+    только hash. Подтверждено по офиц. доке (core.telegram.org/bots/webapps:
+    Ed25519-метод отдельно исключает "hash и signature" — то есть базовый
+    HMAC-метод исключает только hash) и референсной реализацией aiogram
+    (aiogram.utils.web_app.check_webapp_signature). Раньше тест ожидал
+    обратное и был не в ладах с кодом и реальными живыми запусками."""
     payload = {
         "auth_date": str(int(time.time())),
         "user": json.dumps({"id": 42, "first_name": "Алина"}, separators=(",", ":")),
+        "signature": "abcdef",
     }
-    raw = sign(payload) + "&signature=abcdef"
+    raw = sign(payload)  # signature подписан вместе с остальными полями
     assert miniapp.validate_init_data(raw, BOT_TOKEN) is not None
+    # Если signature добавили ПОСЛЕ подписи (не входил в hash) — не совпадёт.
+    tampered = sign({k: v for k, v in payload.items() if k != "signature"}) + "&signature=abcdef"
+    assert miniapp.validate_init_data(tampered, BOT_TOKEN) is None
 
 
 # -------------------------------------------------------------------- курс
