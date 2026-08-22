@@ -20,7 +20,16 @@ _ORDER_INTENT = re.compile(
 )
 
 
+# Живой баг: "как оформить возврат" совпадало с _ORDER_INTENT (там же есть
+# "(?:как|где)\s+(?:заказать|купить|оформить)") и клиенту, просящему помощь
+# с возвратом, уходил QR на оплату вместо передачи человеку. "возврат" в
+# тексте — явный сигнал "не про новый заказ", отсекаем его раньше матчинга.
+_REFUND_CONTEXT = re.compile(r"возврат|верн(?:уть|ите)\s+(?:деньги|товар)", re.IGNORECASE)
+
+
 def wants_to_order(text: str) -> bool:
+    if _REFUND_CONTEXT.search(text):
+        return False
     return bool(_ORDER_INTENT.search(text))
 
 
@@ -103,7 +112,12 @@ def promised_clock_time_hours(text: str, now: float) -> float | None:
     if hour > 23 or minute > 59:
         return None
     qualifier = (qualifier or "").lower()
-    if qualifier in ("вечера", "ночи") and hour < 12:
+    # Живой баг: "12 ночи" (полночь, час 0) и "12 дня" (полдень, час 12)
+    # раньше давали одно и то же время — при hour == 12 условие "hour < 12"
+    # не срабатывало, и "12 ночи" оставался как есть, то есть полднём.
+    if hour == 12 and qualifier in ("вечера", "ночи"):
+        hour = 0
+    elif qualifier in ("вечера", "ночи") and hour < 12:
         hour += 12
     if hour > 23:
         return None
@@ -121,6 +135,17 @@ _MONTH_STEMS = {
     "июл": 7, "август": 8, "сентябр": 9, "октябр": 10, "ноябр": 11, "декабр": 12,
 }
 _DAY_OF_MONTH = re.compile(r"\b([1-9]|[12]\d|3[01])[-\s]?(?:го|ого)\b", re.IGNORECASE)
+# Живой баг: докстринг promised_calendar_date_hours обещает, что "5 сентября"
+# (без "-го") тоже сработает, но _DAY_OF_MONTH требовал суффикс обязательно —
+# такая формулировка тихо проваливалась в более неточную обработку. Число
+# без суффикса матчим отдельно, только сразу перед названием месяца — иначе
+# любое число 1-31 в тексте ("14 полосок", "30 минут") ловилось бы как дата.
+_DAY_MONTH_BARE = re.compile(
+    r"\b([1-9]|[12]\d|3[01])\s+"
+    r"(?:январ\w*|феврал\w*|март\w*|апрел\w*|ма[ея]\w*|июн\w*|июл\w*|"
+    r"август\w*|сентябр\w*|октябр\w*|ноябр\w*|декабр\w*)",
+    re.IGNORECASE,
+)
 _EVENING_QUALIFIER = re.compile(r"вечер", re.IGNORECASE)
 
 
@@ -140,7 +165,7 @@ def promised_calendar_date_hours(text: str, now: float) -> float | None:
     дата в текущем месяце уже прошла — переносим на следующий месяц; если
     месяц назван явно и дата в этом году уже прошла — на следующий год.
     """
-    match = _DAY_OF_MONTH.search(text)
+    match = _DAY_OF_MONTH.search(text) or _DAY_MONTH_BARE.search(text)
     if not match:
         return None
     day = int(match.group(1))
@@ -222,7 +247,7 @@ def asks_scam_doubt(text: str) -> bool:
 
 
 _COMPLAINT_MARKERS = re.compile(
-    r"развод|обман(?:ули)?|кинул|мошенник|верните\s+деньги|хочу\s+возврат|"
+    r"развод|обман(?:ули)?|кинул|мошенник|верн(?:уть|ите)\s+(?:деньги|товар)|возврат|"
     r"ужасн(?:о|ый|ая)|отвратительн|никогда\s+(?:больше\s+)?не\s+куплю|"
     r"плохо\s+сработал|не\s+помогл|это\s+не\s+то|разочарован",
     re.IGNORECASE,

@@ -7,6 +7,8 @@
 где ответ и так один и тот же текст.
 """
 
+import re
+
 PRODUCT_INFO = (
     "Здравствуйте! 😊\n\n"
     "SmileKit помогает заметно отбелить зубы уже после первого применения.\n\n"
@@ -241,9 +243,14 @@ def fill_nudge_template(template: str, client_name: str | None) -> str:
 # Города Бишкек/Токмок — доставка Яндекс за 30 минут; остальные города КР —
 # Ылдам Экспресс. Список синхронизирован с _CITY_MARKERS в media.py.
 BISHKEK_MARKERS = ("бишкек", "токмок")
+# "ош" — не в этом кортеже: короткая подстрока ловила бы "хорошо", "тошнит",
+# "картошка" и т.п. как упоминание города. Матчится отдельно, через regex
+# с границами слова (см. _OSH_RE ниже) — остальные названия достаточно
+# длинные и специфичные, чтобы не давать ложных срабатываний подстрокой.
 OTHER_KG_CITY_MARKERS = (
-    "ош", "джалал-абад", "джалалабад", "каракол", "нарын", "талас", "баткен", "манас",
+    "джалал-абад", "джалалабад", "каракол", "нарын", "талас", "баткен", "манас",
 )
+_OSH_RE = re.compile(r"\bош\b", re.IGNORECASE | re.UNICODE)
 KZ_ALMATY_MARKERS = ("алмат",)
 KZ_OTHER_MARKERS = ("астан",)
 UZ_TASHKENT_MARKERS = ("ташкент",)
@@ -269,7 +276,7 @@ def delivery_template_for_city(text: str) -> str | None:
     # самая частая опечатка на этих двух словах.
     if any(marker in normalized.replace("щ", "ш") for marker in BISHKEK_MARKERS):
         return DELIVERY_BISHKEK
-    if any(marker in normalized for marker in OTHER_KG_CITY_MARKERS):
+    if _OSH_RE.search(normalized) or any(marker in normalized for marker in OTHER_KG_CITY_MARKERS):
         return DELIVERY_OTHER_KG
     if any(marker in normalized for marker in KZ_ALMATY_MARKERS):
         return DELIVERY_KZ_ALMATY

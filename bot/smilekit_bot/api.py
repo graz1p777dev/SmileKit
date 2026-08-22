@@ -11,6 +11,7 @@
 
 import base64
 import binascii
+import hmac
 import logging
 import time
 from pathlib import Path
@@ -118,7 +119,12 @@ def _require_auth(request: web.Request) -> web.Response | None:
     settings: Settings = request.app["settings"]
     expected = settings.bot_internal_token.get_secret_value()
     provided = request.headers.get("x-internal-token", "")
-    if not expected or provided != expected:
+    # Живой баг: обычное `!=` сравнивает строки посимвольно и выходит на
+    # первом несовпадении — время ответа слегка зависит от того, сколько
+    # начальных символов угаданы верно (timing side-channel на секрет,
+    # который может слать сообщения от имени бота и двигать сделки в CRM).
+    # compare_digest — та же защита, что уже стоит у Mini App (miniapp.py).
+    if not expected or not hmac.compare_digest(provided, expected):
         return web.json_response({"error": "forbidden"}, status=403)
     return None
 
@@ -301,11 +307,16 @@ async def post_chat_broadcast_handler(request: web.Request) -> web.Response:
     if bot is None:
         return web.json_response({"error": "bot_unavailable"}, status=503)
     storage: BotStorage = request.app["storage"]
+    # Живой баг: оба try были в одном блоке, а json.JSONDecodeError — это
+    # подкласс ValueError, поэтому битый JSON с валидным chat_id ловился
+    # веткой "except ValueError" и репортился как "invalid chat_id" —
+    # неверная причина сбивала с толку при отладке.
     try:
         chat_id = int(request.match_info["chat_id"])
-        body = await request.json()
     except ValueError:
         return web.json_response({"error": "invalid chat_id"}, status=400)
+    try:
+        body = await request.json()
     except Exception:
         return web.json_response({"error": "invalid_json"}, status=400)
     text = body.get("text") if isinstance(body, dict) else None

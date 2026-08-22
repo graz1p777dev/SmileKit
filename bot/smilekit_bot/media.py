@@ -50,10 +50,14 @@ _COMPLAINT_MARKERS = (
     "не работает",
 )
 
+# "ош" — не в этом кортеже: подстрокой ловит "хорошо"/"тошнит"/"картошка".
+# Матчится отдельно через regex с границами слова (_OSH_RE) — синхронизирован
+# с тем же приёмом в templates.py.
 _CITY_MARKERS = (
-    "бишкек", "токмок", "ош", "джалал-абад", "джалалабад", "каракол", "нарын",
+    "бишкек", "токмок", "джалал-абад", "джалалабад", "каракол", "нарын",
     "талас", "баткен", "манас", "алмат", "астан", "ташкент", "москв", "росси",
 )
+_OSH_RE = re.compile(r"\bош\b", re.IGNORECASE | re.UNICODE)
 _PRICE_MARKERS = ("сколько стоит", "какая цена", "цена?", "1490 сом")
 
 
@@ -85,7 +89,7 @@ def should_send_results_after_city(text: str, history: list[str]) -> bool:
     normalized = " ".join(text.lower().split())
     if any(marker in normalized for marker in _COMPLAINT_MARKERS):
         return False
-    has_city = any(marker in normalized for marker in _CITY_MARKERS)
+    has_city = _OSH_RE.search(normalized) is not None or any(marker in normalized for marker in _CITY_MARKERS)
     prior_text = " ".join(item.lower() for item in history)
     prior_price = any(marker in prior_text for marker in _PRICE_MARKERS)
     asked_for_city = "из какого вы города" in prior_text or "вы в бишкеке" in prior_text
