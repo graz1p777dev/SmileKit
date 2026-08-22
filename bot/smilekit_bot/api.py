@@ -32,6 +32,10 @@ LOGGER = logging.getLogger(__name__)
 VOICE_ASSETS = {
     "first_use_effect.ogg": Path(__file__).resolve().parent.parent / "assets" / "voice" / "first_use_effect.ogg",
     "not_scam.ogg": Path(__file__).resolve().parent.parent / "assets" / "voice" / "not_scam.ogg",
+    # WhatsApp-канал: тот же шаг, что делает голосовым delivery_order.ogg
+    # в Telegram — озвучка чек-листа оформления (чек, адрес, телефон),
+    # который раньше уходил только текстом (см. bot-reply.ts ORDER_INTENT).
+    "order_checklist.ogg": Path(__file__).resolve().parent.parent / "assets" / "voice" / "order_checklist.ogg",
 }
 RESULT_ASSETS = {
     "before.jpg": Path(__file__).resolve().parent.parent / "assets" / "results" / "before.jpg",
