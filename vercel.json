@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
-    { "source": "/app", "destination": "https://smilekit-bot-production.up.railway.app/app" },
-    { "source": "/app/:path*", "destination": "https://smilekit-bot-production.up.railway.app/app/:path*" }
+    { "source": "/app", "destination": "https://smilekit-bot-production-ad9d.up.railway.app/app" },
+    { "source": "/app/:path*", "destination": "https://smilekit-bot-production-ad9d.up.railway.app/app/:path*" }
   ]
 }
