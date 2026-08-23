@@ -37,6 +37,9 @@ VOICE_ASSETS = {
     # в Telegram — озвучка чек-листа оформления (чек, адрес, телефон),
     # который раньше уходил только текстом (см. bot-reply.ts ORDER_INTENT).
     "order_checklist.ogg": Path(__file__).resolve().parent.parent / "assets" / "voice" / "order_checklist.ogg",
+    # WhatsApp-канал: уходит следом за QR оплаты при оформлении заказа
+    # (см. bot-reply.ts sendPaymentQr).
+    "qr_payment_note.ogg": Path(__file__).resolve().parent.parent / "assets" / "voice" / "qr_payment_note.ogg",
 }
 RESULT_ASSETS = {
     "before.jpg": Path(__file__).resolve().parent.parent / "assets" / "results" / "before.jpg",
