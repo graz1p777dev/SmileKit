@@ -113,6 +113,14 @@ class BotStorage:
                     created_at REAL NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS bot_events_id_idx ON bot_events(id);
+                CREATE TABLE IF NOT EXISTS delivery_messages (
+                    group_chat_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    external_key TEXT NOT NULL,
+                    closed INTEGER NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (group_chat_id, message_id)
+                );
                 """
             )
             self._db.commit()
@@ -135,6 +143,8 @@ class BotStorage:
                 self._db.execute("ALTER TABLE pending_payments ADD COLUMN receipt_file_id TEXT")
             if "receipt_kind" not in cols:
                 self._db.execute("ALTER TABLE pending_payments ADD COLUMN receipt_kind TEXT")
+            if "external_key" not in cols:
+                self._db.execute("ALTER TABLE pending_payments ADD COLUMN external_key TEXT")
             self._db.commit()
 
     def _migrate_messages_sender(self) -> None:
@@ -653,13 +663,14 @@ class BotStorage:
         address: str | None,
         customer_username: str | None,
         source: str | None,
+        external_key: str | None = None,
     ) -> None:
         with self._lock:
             self._db.execute(
                 """
                 INSERT INTO pending_payments
-                    (chat_id, order_summary, amount, currency, customer_name, customer_phone, city, address, customer_username, source, reminder_count, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                    (chat_id, order_summary, amount, currency, customer_name, customer_phone, city, address, customer_username, source, external_key, reminder_count, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
                 ON CONFLICT(chat_id) DO UPDATE SET
                     order_summary = excluded.order_summary,
                     amount = excluded.amount,
@@ -670,13 +681,14 @@ class BotStorage:
                     address = excluded.address,
                     customer_username = excluded.customer_username,
                     source = excluded.source,
+                    external_key = excluded.external_key,
                     receipt_verified = 0,
                     receipt_file_id = NULL,
                     receipt_kind = NULL,
                     reminder_count = 0,
                     created_at = excluded.created_at
                 """,
-                (chat_id, order_summary, amount, currency, customer_name, customer_phone, city, address, customer_username, source, time.time()),
+                (chat_id, order_summary, amount, currency, customer_name, customer_phone, city, address, customer_username, source, external_key, time.time()),
             )
             self._db.commit()
 
@@ -726,6 +738,40 @@ class BotStorage:
                 "SELECT * FROM pending_payments WHERE chat_id = ?", (chat_id,)
             ).fetchone()
         return dict(row) if row else None
+
+    def save_delivery_message(self, group_chat_id: int, message_id: int, external_key: str) -> None:
+        """Запоминаем, какому заказу соответствует сообщение в группе доставки —
+        реакция (лайк) на него дальше помечает заказ закрытым (см.
+        claim_delivery_message_closed, обработчик message_reaction в __main__.py)."""
+        with self._lock:
+            self._db.execute(
+                """
+                INSERT INTO delivery_messages (group_chat_id, message_id, external_key, closed, created_at)
+                VALUES (?, ?, ?, 0, ?)
+                ON CONFLICT(group_chat_id, message_id) DO UPDATE SET
+                    external_key = excluded.external_key
+                """,
+                (group_chat_id, message_id, external_key, time.time()),
+            )
+            self._db.commit()
+
+    def claim_delivery_message_closed(self, group_chat_id: int, message_id: int) -> str | None:
+        """Атомарно помечает сообщение закрытым и возвращает external_key
+        заказа — только при первом вызове (первая реакция), чтобы повторные
+        реакции (или реакции сразу нескольких людей) не дёргали CRM повторно."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT external_key, closed FROM delivery_messages WHERE group_chat_id = ? AND message_id = ?",
+                (group_chat_id, message_id),
+            ).fetchone()
+            if row is None or row["closed"]:
+                return None
+            self._db.execute(
+                "UPDATE delivery_messages SET closed = 1 WHERE group_chat_id = ? AND message_id = ?",
+                (group_chat_id, message_id),
+            )
+            self._db.commit()
+            return row["external_key"]
 
     def increment_payment_reminder(self, chat_id: int) -> int:
         with self._lock:

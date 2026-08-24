@@ -17,6 +17,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     MenuButtonWebApp,
     Message,
+    MessageReactionUpdated,
     WebAppInfo,
 )
 from aiohttp import web
@@ -427,6 +428,7 @@ async def main() -> None:
                 address=payload.get("address"),
                 customer_username=payload.get("customerUsername"),
                 source="Telegram",
+                external_key=payload.get("externalKey"),
             )
             if QR_CODE_PATH.exists():
                 await bot.send_photo(chat_id, FSInputFile(QR_CODE_PATH))
@@ -468,7 +470,8 @@ async def main() -> None:
             f"Город: {payment.get('city') or '—'}\n"
             f"Адрес: {payment.get('address') or '—'}\n"
             f"Что взял: {order_summary}\n"
-            f"Сумма: {payment.get('amount')} {payment.get('currency') or ''}"
+            f"Сумма: {payment.get('amount')} {payment.get('currency') or ''}\n\n"
+            "Доставили — поставьте реакцию на это сообщение, заказ закроется сам."
         )
         saved_group_id = storage.get_bot_setting(DELIVERY_GROUP_SETTING_KEY)
         try:
@@ -483,9 +486,12 @@ async def main() -> None:
             return False
         try:
             if receipt_kind == "pdf":
-                await bot.send_document(group_chat_id, receipt_file_id, caption=caption)
+                sent = await bot.send_document(group_chat_id, receipt_file_id, caption=caption)
             else:
-                await bot.send_photo(group_chat_id, receipt_file_id, caption=caption)
+                sent = await bot.send_photo(group_chat_id, receipt_file_id, caption=caption)
+            external_key = payment.get("external_key")
+            if external_key:
+                storage.save_delivery_message(group_chat_id, sent.message_id, str(external_key))
             storage.log_event(
                 payment.get("chat_id"), "info", "order", "order.sent_to_delivery_group",
                 "Оплаченный заказ и чек отправлены в группу доставки",
@@ -1143,6 +1149,22 @@ async def main() -> None:
             "После подтверждения оплаты сюда будут приходить данные клиента и чек."
         )
         logging.info("Delivery group configured chat=%s by=%s", message.chat.id, message.from_user.id)
+
+    @dp.message_reaction()
+    async def handle_delivery_reaction(reaction: MessageReactionUpdated) -> None:
+        """Курьер поставил любую реакцию на сообщение с заказом в группе
+        доставки — заказ закрывается сам (см. storage.save_delivery_message,
+        проставляется при отправке в push_to_delivery_group /
+        push_delivery_handler). Пустой new_reaction (реакцию убрали) —
+        игнорируем, закрываем только на добавление."""
+        if not reaction.new_reaction:
+            return
+        external_key = storage.claim_delivery_message_closed(reaction.chat.id, reaction.message_id)
+        if external_key is None:
+            return
+        closed = await crm.close_order(external_key)
+        if not closed:
+            logging.warning("Delivery reaction: CRM close failed for %s", external_key)
 
     async def handle_receipt_file(
         message: Message, pending: dict, *, file_id: str, file_bytes: bytes, kind: str

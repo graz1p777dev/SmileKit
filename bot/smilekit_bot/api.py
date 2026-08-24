@@ -516,19 +516,29 @@ async def post_push_delivery_handler(request: web.Request) -> web.Response:
             f"Город: {body.get('city') or '—'}\n"
             f"Адрес: {body.get('address') or '—'}\n"
             f"Что взял: {order_summary}\n"
-            f"Сумма: {body.get('amount') or '—'} {body.get('currency') or ''}"
+            f"Сумма: {body.get('amount') or '—'} {body.get('currency') or ''}\n\n"
+            "Доставили — поставьте реакцию на это сообщение, заказ закроется сам."
         )
 
     file_name = "receipt.pdf" if kind == "pdf" else "receipt.jpg"
     input_file = BufferedInputFile(file_bytes, filename=file_name)
     try:
         if kind == "pdf":
-            await bot.send_document(group_chat_id, input_file, caption=caption)
+            sent = await bot.send_document(group_chat_id, input_file, caption=caption)
         else:
-            await bot.send_photo(group_chat_id, input_file, caption=caption)
+            sent = await bot.send_photo(group_chat_id, input_file, caption=caption)
     except Exception:
         LOGGER.exception("Failed to push %s order to delivery group chat=%s", source, group_chat_id)
         return web.json_response({"error": "send_failed"}, status=502)
+
+    # Реакция на это сообщение (см. message_reaction в __main__.py) закрывает
+    # заказ в CRM — но только для успешно оплаченных (не для чеков на ручную
+    # проверку: там ещё нечего закрывать).
+    external_key = body.get("externalKey")
+    if not reasons and isinstance(external_key, str) and external_key.strip():
+        storage: BotStorage = request.app["storage"]
+        storage.save_delivery_message(group_chat_id, sent.message_id, external_key.strip())
+
     return web.json_response({"ok": True})
 
 

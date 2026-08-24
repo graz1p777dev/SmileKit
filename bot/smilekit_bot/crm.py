@@ -34,6 +34,7 @@ NON_STANDARD_REQUEST_STAGE = "non_standard_request"
 
 ORDER_PATH = "/api/internal/orders"
 ORDER_RECEIPT_PATH = "/api/internal/orders/attach-receipt"
+ORDER_CLOSE_PATH = "/api/internal/orders/close"
 DEALS_PATH = "/api/internal/deals"
 NOTIFY_PATH = "/api/internal/notify"
 REQUEST_TIMEOUT = 10.0
@@ -234,6 +235,19 @@ class CrmClient:
             LOGGER.exception("CRM order delivery failed for %s", payload.get("externalKey"))
             return False
         LOGGER.info("Order %s delivered to CRM", payload.get("externalKey"))
+        return True
+
+    async def close_order(self, external_key: str) -> bool:
+        """Помечает заказ доставленным — курьер отреагировал на сообщение в
+        группе доставки (см. message_reaction в __main__.py). Никогда не
+        бросает исключение наружу."""
+        if not self.enabled:
+            return False
+        try:
+            await asyncio.to_thread(self._request, "POST", ORDER_CLOSE_PATH, {"externalKey": external_key})
+        except Exception:
+            LOGGER.exception("CRM order close failed for %s", external_key)
+            return False
         return True
 
     async def attach_receipt(self, telegram_chat_id: int, media_url: str) -> bool:
