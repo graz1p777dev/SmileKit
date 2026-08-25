@@ -537,7 +537,7 @@ async def post_push_delivery_handler(request: web.Request) -> web.Response:
     external_key = body.get("externalKey")
     if not reasons and isinstance(external_key, str) and external_key.strip():
         storage: BotStorage = request.app["storage"]
-        storage.save_delivery_message(group_chat_id, sent.message_id, external_key.strip())
+        storage.save_delivery_message(group_chat_id, sent.message_id, external_key.strip(), caption)
 
     return web.json_response({"ok": True})
 

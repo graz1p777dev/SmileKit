@@ -2,6 +2,7 @@ import asyncio
 import base64
 import logging
 import random
+import re
 import time
 from collections import defaultdict
 from io import BytesIO
@@ -96,6 +97,15 @@ ROUTED_TEMPLATES = {
     "delivery_address_question": templates.ADDRESS_COD_REPLY,
 }
 DELIVERY_GROUP_SETTING_KEY = "delivery_group_chat_id"
+# Курьер отвечает на сообщение с заказом в группе доставки коротким словом —
+# «Взял»/«беру»/«забрал» и т.п. — сигнал «принял заказ в работу» (см.
+# handle_delivery_accept). \b тут безопасен: все слова латиницей не начинаются
+# и не заканчиваются кириллицей вплотную к границе (полные слова).
+ACCEPT_CLAIM_WORD = re.compile(
+    r"^\s*(?:взял[ао]?|беру|забира[юя]|забрал[ао]?|мо[йя]|это\s+я|принял[ао]?)[\s!.,)👍✅]*$",
+    re.IGNORECASE,
+)
+TELEGRAM_BOT_LINK_TEXT = "Открой «Программа» в меню бота 👇 — там уход и напоминания специально для тебя."
 # Клиент часто пишет мыслями через несколько сообщений подряд (видно на
 # живых чатах). Без этого окна каждое такое сообщение уходило в отдельный
 # независимый вызов AI, и клиенту прилетало по несколько ответов подряд.
@@ -491,7 +501,7 @@ async def main() -> None:
                 sent = await bot.send_photo(group_chat_id, receipt_file_id, caption=caption)
             external_key = payment.get("external_key")
             if external_key:
-                storage.save_delivery_message(group_chat_id, sent.message_id, str(external_key))
+                storage.save_delivery_message(group_chat_id, sent.message_id, str(external_key), caption)
             storage.log_event(
                 payment.get("chat_id"), "info", "order", "order.sent_to_delivery_group",
                 "Оплаченный заказ и чек отправлены в группу доставки",
@@ -1165,6 +1175,65 @@ async def main() -> None:
         closed = await crm.close_order(external_key)
         if not closed:
             logging.warning("Delivery reaction: CRM close failed for %s", external_key)
+
+    async def notify_telegram_client_shipped(chat_id: int) -> None:
+        """Заказ принят курьером — та же благодарность+инструкция+ссылка на
+        программу, что для WhatsApp-клиентов уходит через CRM
+        (notify-shipped), только напрямую: этот клиент уже в этом же боте."""
+        try:
+            await bot.send_message(chat_id, "Спасибо за покупку! 🎉 Заказ уже у курьера — скоро будет у вас.")
+            if INSTRUCTIONS_IMAGE_PATH.exists():
+                await bot.send_photo(
+                    chat_id, FSInputFile(INSTRUCTIONS_IMAGE_PATH), caption=templates.USAGE_INSTRUCTIONS
+                )
+            await bot.send_message(chat_id, TELEGRAM_BOT_LINK_TEXT)
+        except Exception:
+            logging.exception("Failed to notify telegram client about shipped order chat=%s", chat_id)
+
+    @dp.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.reply_to_message, F.text)
+    async def handle_delivery_accept(message: Message) -> None:
+        """Курьер ответил на сообщение с заказом в группе доставки коротким
+        «Взял» (см. ACCEPT_CLAIM_WORD) — заказ помечается принятым: подпись
+        сообщения дополняется «✅ Принято», статус в CRM меняется на
+        'shipped', а клиенту уходит благодарность + инструкция + ссылка на
+        программу ухода. Если это не тред заказа или слово не совпало —
+        обработчик просто ничего не делает (не мешает обычной переписке в
+        группе, если там есть другие разговоры)."""
+        if not ACCEPT_CLAIM_WORD.match(message.text or ""):
+            return
+        reply = message.reply_to_message
+        claim = storage.claim_delivery_message_accepted(message.chat.id, reply.message_id)
+        if claim is None:
+            return  # не сообщение с заказом или уже принято раньше
+        who = message.from_user.full_name if message.from_user else "курьер"
+        new_caption = f"{claim['caption']}\n\n✅ Принято: {who}"[:1024]
+        try:
+            await bot.edit_message_caption(chat_id=message.chat.id, message_id=reply.message_id, caption=new_caption)
+        except Exception:
+            # Живой баг-сценарий: не смогли отредактировать (сообщение
+            # старое/без caption/права) — не молчим, пишем отдельным
+            # сообщением, что заказ принят, как и предполагалось изначально.
+            try:
+                await message.reply(f"✅ Заказ принят: {who}")
+            except Exception:
+                logging.exception("Delivery accept: fallback reply failed chat=%s", message.chat.id)
+
+        external_key = claim["external_key"]
+        updated = await crm.close_order(external_key, status="shipped")
+        if not updated:
+            logging.warning("Delivery accept: CRM status update failed for %s", external_key)
+
+        if external_key.startswith("telegram:"):
+            try:
+                client_chat_id = int(external_key.split(":")[1])
+            except (IndexError, ValueError):
+                client_chat_id = None
+            if client_chat_id is not None:
+                await notify_telegram_client_shipped(client_chat_id)
+        else:
+            notified = await crm.notify_order_shipped(external_key)
+            if not notified:
+                logging.warning("Delivery accept: client notify failed for %s", external_key)
 
     async def handle_receipt_file(
         message: Message, pending: dict, *, file_id: str, file_bytes: bytes, kind: str

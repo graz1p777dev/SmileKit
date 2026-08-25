@@ -118,6 +118,8 @@ class BotStorage:
                     message_id INTEGER NOT NULL,
                     external_key TEXT NOT NULL,
                     closed INTEGER NOT NULL DEFAULT 0,
+                    accepted INTEGER NOT NULL DEFAULT 0,
+                    caption TEXT NOT NULL DEFAULT '',
                     created_at REAL NOT NULL,
                     PRIMARY KEY (group_chat_id, message_id)
                 );
@@ -739,21 +741,53 @@ class BotStorage:
             ).fetchone()
         return dict(row) if row else None
 
-    def save_delivery_message(self, group_chat_id: int, message_id: int, external_key: str) -> None:
+    def save_delivery_message(
+        self, group_chat_id: int, message_id: int, external_key: str, caption: str = ""
+    ) -> None:
         """Запоминаем, какому заказу соответствует сообщение в группе доставки —
-        реакция (лайк) на него дальше помечает заказ закрытым (см.
-        claim_delivery_message_closed, обработчик message_reaction в __main__.py)."""
+        текстовый ответ «Взял» помечает заказ принятым (см.
+        claim_delivery_message_accepted), а реакция (лайк или любая другая) —
+        доставленным (см. claim_delivery_message_closed). caption сохраняем,
+        чтобы при «Взял» дописать в подпись «✅ Принято», а не терять
+        исходный текст заказа при редактировании сообщения."""
         with self._lock:
             self._db.execute(
                 """
-                INSERT INTO delivery_messages (group_chat_id, message_id, external_key, closed, created_at)
-                VALUES (?, ?, ?, 0, ?)
+                INSERT INTO delivery_messages (group_chat_id, message_id, external_key, closed, accepted, caption, created_at)
+                VALUES (?, ?, ?, 0, 0, ?, ?)
                 ON CONFLICT(group_chat_id, message_id) DO UPDATE SET
-                    external_key = excluded.external_key
+                    external_key = excluded.external_key,
+                    caption = excluded.caption
                 """,
-                (group_chat_id, message_id, external_key, time.time()),
+                (group_chat_id, message_id, external_key, caption, time.time()),
             )
             self._db.commit()
+
+    def get_delivery_message(self, group_chat_id: int, message_id: int) -> dict | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM delivery_messages WHERE group_chat_id = ? AND message_id = ?",
+                (group_chat_id, message_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def claim_delivery_message_accepted(self, group_chat_id: int, message_id: int) -> dict | None:
+        """Атомарно помечает сообщение принятым («Взял» от курьера) и
+        возвращает {external_key, caption} — только при первом вызове, чтобы
+        повторные «Взял» в том же треде не дёргали клиента снова."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT external_key, caption, accepted FROM delivery_messages WHERE group_chat_id = ? AND message_id = ?",
+                (group_chat_id, message_id),
+            ).fetchone()
+            if row is None or row["accepted"]:
+                return None
+            self._db.execute(
+                "UPDATE delivery_messages SET accepted = 1 WHERE group_chat_id = ? AND message_id = ?",
+                (group_chat_id, message_id),
+            )
+            self._db.commit()
+            return {"external_key": row["external_key"], "caption": row["caption"]}
 
     def claim_delivery_message_closed(self, group_chat_id: int, message_id: int) -> str | None:
         """Атомарно помечает сообщение закрытым и возвращает external_key

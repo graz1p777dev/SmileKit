@@ -35,6 +35,7 @@ NON_STANDARD_REQUEST_STAGE = "non_standard_request"
 ORDER_PATH = "/api/internal/orders"
 ORDER_RECEIPT_PATH = "/api/internal/orders/attach-receipt"
 ORDER_CLOSE_PATH = "/api/internal/orders/close"
+ORDER_NOTIFY_SHIPPED_PATH = "/api/internal/orders/notify-shipped"
 DEALS_PATH = "/api/internal/deals"
 NOTIFY_PATH = "/api/internal/notify"
 REQUEST_TIMEOUT = 10.0
@@ -237,16 +238,36 @@ class CrmClient:
         LOGGER.info("Order %s delivered to CRM", payload.get("externalKey"))
         return True
 
-    async def close_order(self, external_key: str) -> bool:
-        """Помечает заказ доставленным — курьер отреагировал на сообщение в
-        группе доставки (см. message_reaction в __main__.py). Никогда не
-        бросает исключение наружу."""
+    async def close_order(self, external_key: str, status: str = "delivered") -> bool:
+        """Меняет статус заказа — курьер отреагировал (status='delivered') или
+        ответил «Взял» (status='shipped') на сообщение в группе доставки
+        (см. message_reaction/handle_delivery_accept в __main__.py). Никогда
+        не бросает исключение наружу."""
         if not self.enabled:
             return False
         try:
-            await asyncio.to_thread(self._request, "POST", ORDER_CLOSE_PATH, {"externalKey": external_key})
+            await asyncio.to_thread(
+                self._request, "POST", ORDER_CLOSE_PATH, {"externalKey": external_key, "status": status}
+            )
         except Exception:
-            LOGGER.exception("CRM order close failed for %s", external_key)
+            LOGGER.exception("CRM order close failed for %s (status=%s)", external_key, status)
+            return False
+        return True
+
+    async def notify_order_shipped(self, external_key: str) -> bool:
+        """Уведомляет WhatsApp-клиента (благодарность + инструкция + ссылка на
+        Telegram-бота) после того, как курьер ответил «Взял» в группе
+        доставки. Для Telegram-заказов бот уведомляет клиента сам, напрямую —
+        этот вызов только для заказов не из Telegram (см. handle_delivery_accept).
+        Никогда не бросает исключение наружу."""
+        if not self.enabled:
+            return False
+        try:
+            await asyncio.to_thread(
+                self._request, "POST", ORDER_NOTIFY_SHIPPED_PATH, {"externalKey": external_key}
+            )
+        except Exception:
+            LOGGER.exception("CRM notify-shipped failed for %s", external_key)
             return False
         return True
 
