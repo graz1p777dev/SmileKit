@@ -113,9 +113,6 @@ DEBOUNCE_SECONDS = 3.0
 # Клиент замолчал после ответа бота — не бросаем диалог: раз бот уже что-то
 # показал (эффект, цену), полчаса тишины — разумный порог "перестал отвечать".
 IDLE_NUDGE_DELAY_SECONDS = 30 * 60
-# CTA «Оформить вам?» после блока результата — не сразу, а после этого
-# молчания клиента (см. order_cta_follow_up).
-ORDER_CTA_DELAY_SECONDS = 5 * 60
 # Ежедневное напоминание про скидку — время дня якорится на первый контакт
 # (написал днём — рассылка днём). Останавливается, как только клиент
 # оформил заказ; ограничено, чтобы не превратиться в бесконечный спам.
@@ -238,20 +235,64 @@ async def main() -> None:
     pending_texts: dict[int, list[str]] = defaultdict(list)
     debounce_tasks: dict[int, asyncio.Task] = {}
 
-    async def follow_up_after_results(chat_id: int, message_id: int) -> None:
-        await asyncio.sleep(3 * 60)
-        if storage.is_paused(chat_id):
-            return  # диалог ведёт менеджер — бот молчит полностью
-        if storage.has_message_after(chat_id, message_id):
+    RESULTS_FOLLOW_UP_DELAYS = (3 * 60, 10 * 60, 15 * 60, 15 * 60, 15 * 60)
+
+    async def push_dozhim_handoff_to_group(chat_id: int) -> None:
+        """Клиент ответил внутри цепочки дожима после результата — бот больше
+        не отвечает в этом чате, карточка уходит в группу доставки
+        («Передача от бота», см. TEMPLATES.md A.7)."""
+        author = None
+        try:
+            author = await bot.get_chat(chat_id)
+        except Exception:
+            logging.exception("Failed to load chat info for handoff chat=%s", chat_id)
+        caption = (
+            "🤝 Передача от бота\n"
+            f"Клиент: {(author.full_name if author else None) or chat_id}\n"
+            f"Ник: {('@' + author.username) if author and author.username else '—'}\n"
+            f"Chat ID: {chat_id}\n\n"
+            "Клиент ответил во время дожима после результатов — дальше ведёт менеджер."
+        )
+        saved_group_id = storage.get_bot_setting(DELIVERY_GROUP_SETTING_KEY)
+        try:
+            group_chat_id = int(saved_group_id) if saved_group_id else settings.delivery_group_chat_id
+        except ValueError:
+            group_chat_id = settings.delivery_group_chat_id
+        if not group_chat_id:
+            logging.warning("Delivery group not configured yet — handoff card not sent. Details:\n%s", caption)
             return
-        if not storage.claim_event(chat_id, "results_follow_up"):
-            return
-        await bot.send_chat_action(chat_id, ChatAction.TYPING)
-        await asyncio.sleep(random.uniform(0.8, 1.3))
-        text = "Если хотите, могу отправить ещё отзывы наших клиентов 😊"
-        sent = await bot.send_message(chat_id, text)
-        storage.add_operator_message(chat_id, sent.message_id, text)
-        storage.log_event(chat_id, "info", "nudge", "nudge.results_follow_up", "Дожим после результатов отправлен")
+        try:
+            await bot.send_message(group_chat_id, caption)
+        except Exception:
+            logging.exception("Failed to send handoff card to delivery group chat=%s", group_chat_id)
+
+    async def follow_up_after_results(chat_id: int, message_id: int, lang: str = "ru") -> None:
+        """Дожим после блока результата — цепочка из 5 шагов с нарастающей
+        скидкой (простой 3/10/15/15/15 минут между шагами, как в WhatsApp-боте).
+        Ответ клиента на любом шаге ловит process() через results_chain_anchor
+        и передаёт диалог в группу — здесь только резервная остановка цепочки
+        и снятие якоря, когда все 5 шагов отправлены без ответа."""
+        texts = templates.t(templates.RESULTS_FOLLOW_UP_TEXTS_I18N, lang)
+        try:
+            for index, (delay, text) in enumerate(zip(RESULTS_FOLLOW_UP_DELAYS, texts), start=1):
+                await asyncio.sleep(delay)
+                if storage.is_paused(chat_id):
+                    return  # диалог передан менеджеру — бот молчит полностью
+                if storage.has_message_after(chat_id, message_id):
+                    return  # клиент уже ответил — process() уже сделал передачу
+                if not storage.claim_event(chat_id, f"results_follow_up_{index}"):
+                    return
+                await bot.send_chat_action(chat_id, ChatAction.TYPING)
+                await asyncio.sleep(random.uniform(0.8, 1.3))
+                sent = await bot.send_message(chat_id, text)
+                storage.add_operator_message(chat_id, sent.message_id, text)
+                storage.log_event(
+                    chat_id, "info", "nudge", f"nudge.results_follow_up_{index}",
+                    f"Дожим после результатов, шаг {index} отправлен",
+                )
+        finally:
+            if storage.get_results_chain_anchor(chat_id) == message_id:
+                storage.clear_results_chain_anchor(chat_id)
 
     async def idle_nudge(chat_id: int, message_id: int) -> None:
         """Клиент замолчал после ответа бота — напоминаем об эффекте один раз
@@ -277,26 +318,6 @@ async def main() -> None:
         storage.add_operator_message(chat_id, sent.message_id, templates.FIRST_USE_EFFECT)
         storage.log_event(chat_id, "info", "nudge", "nudge.idle", "Напоминание об эффекте после простоя отправлено")
 
-    async def order_cta_follow_up(chat_id: int, message_id: int) -> None:
-        """CTA «Оформить вам? Пока есть в наличии.» — через 5 минут молчания
-        после блока результата (доставка -> фото -> голосовое), а не сразу
-        следующим сообщением: клиент не успевал даже дослушать голосовое,
-        как бот уже предлагал оформить. claim_event по message_id — тот же
-        приём, что idle_nudge."""
-        await asyncio.sleep(ORDER_CTA_DELAY_SECONDS)
-        if storage.is_paused(chat_id):
-            return  # диалог ведёт менеджер — бот молчит полностью
-        if storage.has_message_after(chat_id, message_id):
-            return
-        if storage.get_pending_payment(chat_id) is not None:
-            return  # уже ждём чек по QR — переспрашивать оформление не к месту
-        if not storage.claim_event(chat_id, f"order_cta:{message_id}"):
-            return
-        await bot.send_chat_action(chat_id, ChatAction.TYPING)
-        await asyncio.sleep(random.uniform(0.8, 1.3))
-        sent = await bot.send_message(chat_id, templates.ORDER_STOCK_CTA)
-        storage.add_operator_message(chat_id, sent.message_id, templates.ORDER_STOCK_CTA)
-        storage.log_event(chat_id, "info", "nudge", "nudge.order_cta", "CTA «оформить» отправлен после 5 минут тишины")
 
     async def check_daily_nudges() -> None:
         while True:
@@ -323,6 +344,56 @@ async def main() -> None:
                     storage.log_event(chat_id, "error", "nudge", "nudge.daily_discount_failed", "Не удалось отправить ежедневное напоминание")
                 storage.advance_daily_nudge(chat_id, now + DAILY_NUDGE_INTERVAL_SECONDS)
 
+    async def _send_nudge_follow_up(chat_id: int, kind: str, now: float) -> None:
+        """Отправляет один дожим из цепочки nudge_follow_ups. Общая логика для
+        фонового воркера (check_nudge_follow_ups) и команды /repeat, которая
+        перематывает эти же таймеры вперёд для ручного тестирования."""
+        if storage.is_paused(chat_id):
+            return  # диалог ведёт менеджер — напоминание сгорает молча
+        try:
+            if kind == "awaiting_payment":
+                pending = storage.get_pending_payment(chat_id)
+                if pending is None:
+                    return  # уже оплатил или отменили — дожимать нечего
+                resume_at = next_allowed_send_time(now)
+                if resume_at is not None:
+                    # Ночь по Бишкеку — не пишем, переносим на утро,
+                    # счётчик попыток не тратим.
+                    storage.schedule_awaiting_payment_reminder(chat_id, resume_at)
+                    return
+                count = storage.increment_payment_reminder(chat_id)
+                await bot.send_chat_action(chat_id, ChatAction.TYPING)
+                await asyncio.sleep(random.uniform(0.6, 1.0))
+                variant = templates.AWAITING_PAYMENT_REMINDERS[(count - 1) % len(templates.AWAITING_PAYMENT_REMINDERS)]
+                sent = await bot.send_message(chat_id, variant)
+                storage.add_operator_message(chat_id, sent.message_id, variant)
+                storage.log_event(chat_id, "info", "nudge", "nudge.awaiting_payment", f"Напоминание про оплату отправлено ({count}/{AWAITING_PAYMENT_MAX_REMINDERS})")
+                if count < AWAITING_PAYMENT_MAX_REMINDERS:
+                    storage.schedule_awaiting_payment_reminder(
+                        chat_id, now + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
+                    )
+                return
+            if kind == "day" and storage.incoming_message_count(chat_id) >= CONSULTATION_MESSAGE_THRESHOLD:
+                template = templates.AFTER_CONSULT_FOLLOWUP
+            else:
+                template = {
+                    "hours": templates.IDLE_FOLLOWUP,
+                    "day": templates.DISCOUNT_FOLLOWUP,
+                    "last": templates.LAST_MESSAGE_FOLLOWUP,
+                    "order_incomplete": templates.ORDER_INCOMPLETE_FOLLOWUP,
+                    "promised": templates.PROMISED_FOLLOWUP,
+                }[kind]
+            author = await bot.get_chat(chat_id)
+            text = templates.fill_nudge_template(template, author.first_name)
+            await bot.send_chat_action(chat_id, ChatAction.TYPING)
+            await asyncio.sleep(random.uniform(0.6, 1.0))
+            sent = await bot.send_message(chat_id, text)
+            storage.add_operator_message(chat_id, sent.message_id, text)
+            storage.log_event(chat_id, "info", "nudge", f"nudge.{kind}", f"Дожим простоя «{kind}» отправлен")
+        except Exception:
+            logging.exception("Nudge follow-up send failed chat=%s kind=%s", chat_id, kind)
+            storage.log_event(chat_id, "error", "nudge", "nudge.failed", f"Не удалось отправить дожим «{kind}»")
+
     async def check_nudge_follow_ups() -> None:
         """Простой без ответа / незавершённый заказ — цепочка напоминаний из
         storage.schedule_nudge_chain/schedule_order_incomplete_nudge."""
@@ -330,51 +401,7 @@ async def main() -> None:
             await asyncio.sleep(NUDGE_CHECK_INTERVAL_SECONDS)
             now = time.time()
             for _id, chat_id, kind in storage.due_nudge_follow_ups(now):
-                if storage.is_paused(chat_id):
-                    continue  # диалог ведёт менеджер — напоминание сгорает молча
-                try:
-                    if kind == "awaiting_payment":
-                        pending = storage.get_pending_payment(chat_id)
-                        if pending is None:
-                            continue  # уже оплатил или отменили — дожимать нечего
-                        resume_at = next_allowed_send_time(now)
-                        if resume_at is not None:
-                            # Ночь по Бишкеку — не пишем, переносим на утро,
-                            # счётчик попыток не тратим.
-                            storage.schedule_awaiting_payment_reminder(chat_id, resume_at)
-                            continue
-                        count = storage.increment_payment_reminder(chat_id)
-                        await bot.send_chat_action(chat_id, ChatAction.TYPING)
-                        await asyncio.sleep(random.uniform(0.6, 1.0))
-                        variant = templates.AWAITING_PAYMENT_REMINDERS[(count - 1) % len(templates.AWAITING_PAYMENT_REMINDERS)]
-                        sent = await bot.send_message(chat_id, variant)
-                        storage.add_operator_message(chat_id, sent.message_id, variant)
-                        storage.log_event(chat_id, "info", "nudge", "nudge.awaiting_payment", f"Напоминание про оплату отправлено ({count}/{AWAITING_PAYMENT_MAX_REMINDERS})")
-                        if count < AWAITING_PAYMENT_MAX_REMINDERS:
-                            storage.schedule_awaiting_payment_reminder(
-                                chat_id, now + AWAITING_PAYMENT_REMINDER_DELAY_SECONDS
-                            )
-                        continue
-                    if kind == "day" and storage.incoming_message_count(chat_id) >= CONSULTATION_MESSAGE_THRESHOLD:
-                        template = templates.AFTER_CONSULT_FOLLOWUP
-                    else:
-                        template = {
-                            "hours": templates.IDLE_FOLLOWUP,
-                            "day": templates.DISCOUNT_FOLLOWUP,
-                            "last": templates.LAST_MESSAGE_FOLLOWUP,
-                            "order_incomplete": templates.ORDER_INCOMPLETE_FOLLOWUP,
-                            "promised": templates.PROMISED_FOLLOWUP,
-                        }[kind]
-                    author = await bot.get_chat(chat_id)
-                    text = templates.fill_nudge_template(template, author.first_name)
-                    await bot.send_chat_action(chat_id, ChatAction.TYPING)
-                    await asyncio.sleep(random.uniform(0.6, 1.0))
-                    sent = await bot.send_message(chat_id, text)
-                    storage.add_operator_message(chat_id, sent.message_id, text)
-                    storage.log_event(chat_id, "info", "nudge", f"nudge.{kind}", f"Дожим простоя «{kind}» отправлен")
-                except Exception:
-                    logging.exception("Nudge follow-up send failed chat=%s kind=%s", chat_id, kind)
-                    storage.log_event(chat_id, "error", "nudge", "nudge.failed", f"Не удалось отправить дожим «{kind}»")
+                await _send_nudge_follow_up(chat_id, kind, now)
 
     async def _submit_order_and_advance(chat_id: int, payload: dict) -> None:
         delivered = await crm.send_order(payload)
@@ -389,7 +416,8 @@ async def main() -> None:
             await asyncio.sleep(random.uniform(0.5, 0.9))
             return await bot.send_voice(chat_id, FSInputFile(DELIVERY_ORDER_VOICE_PATH))
         logging.warning("Delivery order voice missing at %s", DELIVERY_ORDER_VOICE_PATH)
-        return await bot.send_message(chat_id, templates.PAYMENT_QR_MESSAGE)
+        lang = storage.get_chat_lang(chat_id) or "ru"
+        return await bot.send_message(chat_id, templates.t(templates.PAYMENT_QR_MESSAGE_I18N, lang))
 
     async def push_order(message: Message, supervisor) -> bool:
         """Запрашивает оплату по QR и заводит заказ в CRM.
@@ -604,7 +632,8 @@ async def main() -> None:
         receipt_url = await telegram_file_url(receipt_file_id)
         if receipt_url:
             await crm.attach_receipt(chat_id, receipt_url)
-        await message.answer(templates.THANK_YOU_ORDER)
+        lang = storage.get_chat_lang(chat_id) or "ru"
+        await message.answer(templates.t(templates.THANK_YOU_ORDER_I18N, lang))
         storage.log_event(
             chat_id, "info", "order", "order.completed",
             "Чек, адрес и телефон получены — заказ передан в доставку",
@@ -706,6 +735,24 @@ async def main() -> None:
             message.message_id,
             kind,
         )
+        chain_anchor = storage.get_results_chain_anchor(chat_id)
+        if chain_anchor is not None and message.message_id > chain_anchor:
+            # Клиент ответил внутри цепочки дожима после результата — по
+            # сценарию (TEMPLATES.md A.7) бот больше не отвечает в этом чате,
+            # карточка уходит в группу доставки.
+            storage.clear_results_chain_anchor(chat_id)
+            storage.add_incoming_message(
+                chat_id, message.message_id,
+                f"[{kind}] {text}" if kind != "text" else text,
+                kind,
+            )
+            storage.pause_chat(chat_id, time.time(), paused_by="dozhim_handoff")
+            await push_dozhim_handoff_to_group(chat_id)
+            storage.log_event(
+                chat_id, "info", "nudge", "nudge.results_chain_handoff",
+                "Клиент ответил в цепочке дожима после результатов — передано в группу доставки",
+            )
+            return
         if storage.is_paused(chat_id):
             # Оператор ведёт этот чат вручную из CRM — бот только сохраняет
             # сообщение клиента и молчит, пока чат не включат обратно.
@@ -720,6 +767,15 @@ async def main() -> None:
 
         history = storage.history(chat_id)
         is_new_conversation = not history
+        lang = storage.get_chat_lang(chat_id)
+        if lang is None or (kind == "text" and text):
+            detected = templates.detect_language(
+                text if kind == "text" else "",
+                message.from_user.language_code if message.from_user else None,
+            )
+            if lang is None or detected != "ru":
+                lang = detected
+                storage.set_chat_lang(chat_id, lang)
         # Клиент написал сам — прежние напоминания о простое устарели.
         storage.cancel_nudge_follow_ups(chat_id)
         push_deal(message, is_new_conversation=is_new_conversation)
@@ -785,8 +841,9 @@ async def main() -> None:
         # прямо спрашиваем, что случилось, шлём важное уведомление в CRM и
         # переносим сделку в «Нестандартный запрос» — разбирает человек.
         if kind == "text" and not is_new_conversation and is_complaint(text):
-            await message.answer(templates.COMPLAINT_PROMPT)
-            storage.add_exchange(chat_id, message.message_id, text, templates.COMPLAINT_PROMPT, kind)
+            complaint_prompt = templates.t(templates.COMPLAINT_PROMPT_I18N, lang)
+            await message.answer(complaint_prompt)
+            storage.add_exchange(chat_id, message.message_id, text, complaint_prompt, kind)
             task = asyncio.create_task(crm.notify_important(
                 title="Жалоба клиента (Smilekit)",
                 body=f"Сообщение клиента: {text}",
@@ -806,8 +863,9 @@ async def main() -> None:
         # обычному скрипту. Отвечаем коротко и переносим сделку в этап
         # «Нестандартный запрос» на ручной разбор.
         if kind == "text" and not is_new_conversation and mentions_cooperation_inquiry(text):
-            await message.answer(templates.COOPERATION_INQUIRY_REPLY)
-            storage.add_exchange(chat_id, message.message_id, text, templates.COOPERATION_INQUIRY_REPLY, kind)
+            cooperation_reply = templates.t(templates.COOPERATION_INQUIRY_REPLY_I18N, lang)
+            await message.answer(cooperation_reply)
+            storage.add_exchange(chat_id, message.message_id, text, cooperation_reply, kind)
             task = asyncio.create_task(crm.notify_important(
                 title="Запрос о сотрудничестве (Smilekit)",
                 body=f"Сообщение клиента: {text}",
@@ -889,14 +947,16 @@ async def main() -> None:
         # Первый контакт — старый готовый сценарий из утверждённого скрипта:
         # информация о товаре и затем отдельный вопрос о городе.
         if is_new_conversation:
-            await message.answer(templates.PRODUCT_INFO)
+            product_info = templates.t(templates.PRODUCT_INFO_I18N, lang)
+            city_question = templates.t(templates.CITY_QUESTION_I18N, lang)
+            await message.answer(product_info)
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.6, 1.0))
-            await message.answer(templates.CITY_QUESTION)
+            await message.answer(city_question)
             storage.add_exchange(
                 chat_id, message.message_id,
                 f"[{kind}] {text}" if kind != "text" else text,
-                f"{templates.PRODUCT_INFO}\n\n{templates.CITY_QUESTION}", kind,
+                f"{product_info}\n\n{city_question}", kind,
             )
             storage.schedule_daily_nudge(chat_id, time.time() + DAILY_NUDGE_INTERVAL_SECONDS)
             task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
@@ -953,7 +1013,7 @@ async def main() -> None:
             # тот же готовый хвост (доставка, результаты, эффект, CTA).
             # Неизвестный городу/стране тоже отвечает Luna — фиксированный
             # список нужен только для быстрых готовых сроков доставки.
-            delivery_text = templates.delivery_template_for_city(text)
+            delivery_text = templates.localize_delivery(templates.delivery_template_for_city(text), lang)
             if "?" in text or not delivery_text:
                 reply = await assistant.reply(
                     text, history,
@@ -978,7 +1038,7 @@ async def main() -> None:
                 await message.answer(delivery_text)
                 await bot.send_chat_action(chat_id, ChatAction.TYPING)
                 await asyncio.sleep(random.uniform(0.7, 1.1))
-            await message.answer("Вот результат нашего клиента до и после применения 👇")
+            await message.answer(templates.t(templates.EFFECT_CAPTION_I18N, lang))
             await bot.send_photo(chat_id, result_photo())
             await bot.send_chat_action(chat_id, ChatAction.RECORD_VOICE)
             await asyncio.sleep(random.uniform(0.8, 1.3))
@@ -989,12 +1049,10 @@ async def main() -> None:
                 "[голосовое: эффект после первого применения]",
             ]))
             storage.add_exchange(chat_id, message.message_id, text, stored_reply, kind)
-            task = asyncio.create_task(follow_up_after_results(chat_id, message.message_id))
+            storage.set_results_chain_anchor(chat_id, message.message_id)
+            task = asyncio.create_task(follow_up_after_results(chat_id, message.message_id, lang))
             follow_up_tasks.add(task)
             task.add_done_callback(follow_up_tasks.discard)
-            cta_task = asyncio.create_task(order_cta_follow_up(chat_id, message.message_id))
-            follow_up_tasks.add(cta_task)
-            cta_task.add_done_callback(follow_up_tasks.discard)
             schedule_idle_follow_up(chat_id, promised_hours)
             return
 
@@ -1076,15 +1134,16 @@ async def main() -> None:
             else:
                 schedule_idle_follow_up(chat_id, promised_hours)
         if kind == "text" and wants_result_photos(text):
-            await message.answer("Вот результат нашего клиента до и после применения 👇")
+            await message.answer(templates.t(templates.EFFECT_CAPTION_I18N, lang))
             await bot.send_photo(chat_id, result_photo())
+            storage.set_results_chain_anchor(chat_id, message.message_id)
             task = asyncio.create_task(
-                follow_up_after_results(chat_id, message.message_id)
+                follow_up_after_results(chat_id, message.message_id, lang)
             )
             follow_up_tasks.add(task)
             task.add_done_callback(follow_up_tasks.discard)
         elif kind == "text" and (wants_review_photos(text) or confirms_review_offer(text, last_assistant_message)):
-            await message.answer("Вот отзывы наших клиентов 👇")
+            await message.answer(templates.t(templates.REVIEWS_CAPTION_I18N, lang))
             await bot.send_media_group(chat_id, media=review_photo_group())
             storage.log_event(chat_id, "info", "reply", "reply.reviews_sent", "Отправлены фото отзывов клиентов")
 
@@ -1095,13 +1154,19 @@ async def main() -> None:
                 return
             chat_id = message.chat.id
             storage.clear_chat(chat_id)
-            await message.answer(templates.PRODUCT_INFO)
+            lang = templates.detect_language(
+                "", message.from_user.language_code if message.from_user else None
+            )
+            storage.set_chat_lang(chat_id, lang)
+            product_info = templates.t(templates.PRODUCT_INFO_I18N, lang)
+            city_question = templates.t(templates.CITY_QUESTION_I18N, lang)
+            await message.answer(product_info)
             await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(random.uniform(0.6, 1.0))
-            await message.answer(templates.CITY_QUESTION)
+            await message.answer(city_question)
             storage.add_exchange(
                 chat_id, message.message_id, "/start",
-                f"{templates.PRODUCT_INFO}\n\n{templates.CITY_QUESTION}", "command",
+                f"{product_info}\n\n{city_question}", "command",
             )
             storage.schedule_daily_nudge(chat_id, time.time() + DAILY_NUDGE_INTERVAL_SECONDS)
             task = asyncio.create_task(idle_nudge(chat_id, message.message_id))
@@ -1115,6 +1180,26 @@ async def main() -> None:
                 return
             storage.clear_chat(message.chat.id)
             await message.answer("Диалог и сохранённая память очищены.")
+
+    @dp.message(Command("repeat"))
+    async def repeat_timers(message: Message) -> None:
+        """Тестовая команда: перематывает вперёд все запланированные для этого
+        чата дожимы (простой, незавершённый заказ, ожидание оплаты) и сразу
+        отправляет их — чтобы проверить логику таймеров, не дожидаясь реального
+        времени."""
+        async with locks[message.chat.id]:
+            if not await claim(message, rate_limit=False):
+                return
+            chat_id = message.chat.id
+            now = time.time()
+            storage.force_due_now(chat_id, now)
+            due = storage.due_nudge_follow_ups_for_chat(chat_id, now)
+            if not due:
+                await message.answer("Нет запланированных дожимов для этого чата — перематывать пока нечего.")
+                return
+            for _id, due_chat_id, kind in due:
+                await _send_nudge_follow_up(due_chat_id, kind, now)
+            await message.answer(f"⏩ Время перемотано, отправлено дожимов: {len(due)}.")
 
     def miniapp_keyboard(label: str) -> InlineKeyboardMarkup | None:
         if not settings.miniapp_url:
@@ -1503,11 +1588,16 @@ async def main() -> None:
                     next_due += 86400
                 app_store.schedule_reminder(chat_id, next_due, day)
 
+    base_commands = [
+        BotCommand(command="reset", description="Очистить диалог и память"),
+        BotCommand(command="repeat", description="Тест: перемотать таймеры дожима"),
+    ]
     if settings.miniapp_url:
         # Команды раньше кнопки меню: их регистрация возвращает кнопку к
         # дефолтному типу "commands", и выставленная до этого web_app-кнопка
         # молча терялась при каждом рестарте.
         await bot.set_my_commands([
+            *base_commands,
             BotCommand(command="app", description="Моя программа SmileKit"),
         ])
         await bot.set_chat_menu_button(
@@ -1517,6 +1607,7 @@ async def main() -> None:
         )
         logging.info("Mini App enabled at %s", settings.miniapp_url)
     else:
+        await bot.set_my_commands(base_commands)
         logging.info("Mini App disabled: MINIAPP_URL not set")
 
     daily_nudge_task = asyncio.create_task(check_daily_nudges())

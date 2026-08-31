@@ -123,6 +123,14 @@ class BotStorage:
                     created_at REAL NOT NULL,
                     PRIMARY KEY (group_chat_id, message_id)
                 );
+                CREATE TABLE IF NOT EXISTS results_chain_anchor (
+                    chat_id INTEGER PRIMARY KEY,
+                    message_id INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS chat_lang (
+                    chat_id INTEGER PRIMARY KEY,
+                    lang TEXT NOT NULL
+                );
                 """
             )
             self._db.commit()
@@ -216,6 +224,50 @@ class BotStorage:
     def resume_chat(self, chat_id: int) -> None:
         with self._lock:
             self._db.execute("DELETE FROM paused_chats WHERE chat_id = ?", (chat_id,))
+            self._db.commit()
+
+    def set_results_chain_anchor(self, chat_id: int, message_id: int) -> None:
+        """Цепочка дожима после результата стартовала на этом message_id —
+        любое сообщение клиента после него засчитывается как ответ в
+        цепочке и запускает передачу в группу доставки (см. B.7)."""
+        with self._lock:
+            self._db.execute(
+                """
+                INSERT INTO results_chain_anchor(chat_id, message_id) VALUES (?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET message_id = excluded.message_id
+                """,
+                (chat_id, message_id),
+            )
+            self._db.commit()
+
+    def get_results_chain_anchor(self, chat_id: int) -> int | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT message_id FROM results_chain_anchor WHERE chat_id = ?", (chat_id,)
+            ).fetchone()
+        return row["message_id"] if row else None
+
+    def clear_results_chain_anchor(self, chat_id: int) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM results_chain_anchor WHERE chat_id = ?", (chat_id,))
+            self._db.commit()
+
+    def get_chat_lang(self, chat_id: int) -> str | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT lang FROM chat_lang WHERE chat_id = ?", (chat_id,)
+            ).fetchone()
+        return row["lang"] if row else None
+
+    def set_chat_lang(self, chat_id: int, lang: str) -> None:
+        with self._lock:
+            self._db.execute(
+                """
+                INSERT INTO chat_lang(chat_id, lang) VALUES (?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET lang = excluded.lang
+                """,
+                (chat_id, lang),
+            )
             self._db.commit()
 
     def log_event(
@@ -643,6 +695,38 @@ class BotStorage:
                 )
                 self._db.commit()
         return [(row["id"], row["chat_id"], row["kind"]) for row in rows]
+
+    def due_nudge_follow_ups_for_chat(self, chat_id: int, now: float) -> list[tuple[int, int, str]]:
+        """Как due_nudge_follow_ups, но только для одного чата — используется
+        командой /repeat, чтобы не задевать напоминания других тестовых чатов."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id, chat_id, kind FROM nudge_follow_ups WHERE chat_id = ? AND sent_at IS NULL AND due_at <= ?",
+                (chat_id, now),
+            ).fetchall()
+            if rows:
+                ids = [row["id"] for row in rows]
+                placeholders = ",".join("?" * len(ids))
+                self._db.execute(
+                    f"UPDATE nudge_follow_ups SET sent_at = ? WHERE id IN ({placeholders})",
+                    (now, *ids),
+                )
+                self._db.commit()
+        return [(row["id"], row["chat_id"], row["kind"]) for row in rows]
+
+    def force_due_now(self, chat_id: int, now: float) -> None:
+        """/repeat: делает все ещё не отправленные дожимы этого чата
+        просроченными «прямо сейчас», как будто время перемотали вперёд."""
+        with self._lock:
+            self._db.execute(
+                "UPDATE nudge_follow_ups SET due_at = ? WHERE chat_id = ? AND sent_at IS NULL",
+                (now, chat_id),
+            )
+            self._db.execute(
+                "UPDATE daily_nudges SET next_due_at = ? WHERE chat_id = ?",
+                (now, chat_id),
+            )
+            self._db.commit()
 
     def incoming_message_count(self, chat_id: int) -> int:
         with self._lock:
