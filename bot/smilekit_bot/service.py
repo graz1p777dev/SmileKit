@@ -513,8 +513,11 @@ class SmilekitAssistant:
         """Вызывает Gemini generateContent, возвращает текст первого кандидата.
         Бросает исключение при сбое — вызывающий код сам решает, что подставить
         вместо ответа (verify_receipt подставляет отказ, транскрибация — ошибку).
-        503 (перегрузка на стороне Google, обычное дело у Gemini) — 2 ретрая
-        с паузой, остальные ошибки бросаются сразу."""
+        Живой баг: ретраились только 503 (перегрузка) — 429 (rate limit) и
+        обычный сетевой таймаут бросались сразу с первой попытки, хотя по
+        логам именно они и были основной причиной падений транскрибации
+        голосовых (клиент оставался вообще без ответа). Теперь ретраятся все
+        три — 503, 429 и таймаут — с той же паузой между попытками."""
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model}:generateContent"
         payload: dict = {"contents": [{"role": "user", "parts": parts}]}
         if response_schema:
@@ -529,17 +532,20 @@ class SmilekitAssistant:
                         url, params={"key": self.gemini_api_key}, json=payload,
                         timeout=aiohttp.ClientTimeout(total=RECEIPT_CHECK_TIMEOUT_SECONDS),
                     ) as response:
-                        if response.status == 503:
+                        if response.status in (503, 429):
                             last_error = aiohttp.ClientResponseError(
-                                response.request_info, response.history, status=503, message="overloaded"
+                                response.request_info, response.history,
+                                status=response.status, message=response.reason or "",
                             )
                             continue
                         response.raise_for_status()
                         data = await response.json()
                         return data["candidates"][0]["content"]["parts"][0]["text"]
             except aiohttp.ClientResponseError as error:
-                if error.status != 503:
+                if error.status not in (503, 429):
                     raise
+                last_error = error
+            except (TimeoutError, asyncio.TimeoutError) as error:
                 last_error = error
         raise last_error or RuntimeError("Gemini generateContent failed after retries")
 

@@ -40,6 +40,20 @@ VOICE_ASSETS = {
     # WhatsApp-канал: уходит следом за QR оплаты при оформлении заказа
     # (см. bot-reply.ts sendPaymentQr).
     "qr_payment_note.ogg": Path(__file__).resolve().parent.parent / "assets" / "voice" / "qr_payment_note.ogg",
+    # WhatsApp-канал: ответ на вопрос «вредно для эмали?» (см. bot-reply.ts
+    # SAFETY_COMPOSITION_HARM_DOUBT) — только для вопроса через «вред»/
+    # «опасно», не через «безопасно» (см. комментарий там же).
+    "not_harmful.ogg": Path(__file__).resolve().parent.parent / "assets" / "voice" / "not_harmful.ogg",
+    # WhatsApp-канал: второе голосовое в блоке результата, сразу после
+    # first_use_effect.ogg (см. bot-reply.ts RESULTS_BLOCK_SAFETY_TEXT) —
+    # проактивно про безопасность состава, без вопроса клиента.
+    "composition_safe.ogg": Path(__file__).resolve().parent.parent / "assets" / "voice" / "composition_safe.ogg",
+    # WhatsApp-канал: ответ на вопрос про стоимость доставки для клиента из
+    # Бишкека/Токмока (см. bot-reply.ts DELIVERY_PAYMENT_BISHKEK).
+    "delivery_price_bishkek.ogg": Path(__file__).resolve().parent.parent
+    / "assets"
+    / "voice"
+    / "delivery_price_bishkek.ogg",
 }
 RESULT_ASSETS = {
     "before.jpg": Path(__file__).resolve().parent.parent / "assets" / "results" / "before.jpg",
@@ -64,7 +78,12 @@ MODEL_KEY = "model"
 # Встроенный MANAGER_PROMPT растёт вместе с бизнес-правилами — лимит должен
 # быть заведомо больше дефолта, иначе «сохранить без правок» тихо обрежет
 # промпт и живой бот получит урезанную инструкцию.
-MAX_PROMPT_LENGTH = 13000
+# Живой баг: лимит не поднимали, пока MANAGER_PROMPT рос из сессии в сессию —
+# он превысил 13000 без единого предупреждения (только LOGGER.warning, никто
+# не смотрит логи ради этого), и хвост промпта — включая запрет раскрывать
+# системные инструкции, правило маркера <NEXT_MESSAGE> и границы темы — молча
+# не долетал до модели. С запасом на дальнейший рост.
+MAX_PROMPT_LENGTH = 20000
 
 
 def allowed_models(settings: Settings) -> list[str]:
