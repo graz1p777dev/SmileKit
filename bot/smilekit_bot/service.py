@@ -563,18 +563,24 @@ class SmilekitAssistant:
                         timeout=aiohttp.ClientTimeout(total=RECEIPT_CHECK_TIMEOUT_SECONDS),
                     ) as response:
                         if response.status in (503, 429):
-                            last_error = aiohttp.ClientResponseError(
-                                response.request_info, response.history,
-                                status=response.status, message=response.reason or "",
+                            last_error = RuntimeError(
+                                f"Gemini generateContent HTTP {response.status} {response.reason or ''}".rstrip()
                             )
                             continue
                         response.raise_for_status()
                         data = await response.json()
                         return data["candidates"][0]["content"]["parts"][0]["text"]
             except aiohttp.ClientResponseError as error:
+                # Живой баг: str(ClientResponseError) включает URL запроса вместе с
+                # ?key=<GEMINI_API_KEY> — ключ утекал в Railway-логи через трейсбек
+                # (error_middleware в api.py логирует исключение целиком). Наружу
+                # отдаём только статус, без URL и без исходного исключения (from None).
+                sanitized = RuntimeError(
+                    f"Gemini generateContent HTTP {error.status} {error.message or ''}".rstrip()
+                )
                 if error.status not in (503, 429):
-                    raise
-                last_error = error
+                    raise sanitized from None
+                last_error = sanitized
             except (TimeoutError, asyncio.TimeoutError) as error:
                 last_error = error
         raise last_error or RuntimeError("Gemini generateContent failed after retries")
