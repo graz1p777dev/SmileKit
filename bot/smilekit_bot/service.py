@@ -8,6 +8,7 @@ from pathlib import Path
 import aiohttp
 from openai import OpenAI
 
+from . import control_center
 from .models import AssistantReply, ChatMessage, CrmAction, SupervisorResult
 from .privacy import apply_mapping, build_mapping, restore_mapping
 from .prompts import (
@@ -238,6 +239,31 @@ def _restore_supervisor_pii(result: SupervisorResult, mapping: dict[str, str]) -
     return result
 
 
+def _record_llm_usage(provider: str, model: str, response: object) -> None:
+    """После вызова LLM — если у ответа есть .usage, кладём расход в батч
+    Control Center (см. control_center.py). Только in-memory append, без
+    сети — не может задержать ответ клиенту. Вызывается из синхронных
+    методов ассистента (выполняются в отдельном треде через
+    asyncio.to_thread), поэтому используется record_usage_sync, а не
+    асинхронная обёртка. Responses API отдаёт usage.input_tokens/
+    output_tokens, chat.completions (DeepSeek) — usage.prompt_tokens/
+    completion_tokens; пробуем оба варианта, тихо выходим, если поля нет
+    вовсе (например у части ответов транскрибации)."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return
+    input_tokens = getattr(usage, "input_tokens", None)
+    output_tokens = getattr(usage, "output_tokens", None)
+    if input_tokens is None or output_tokens is None:
+        input_tokens = getattr(usage, "prompt_tokens", None)
+        output_tokens = getattr(usage, "completion_tokens", None)
+    if input_tokens is None or output_tokens is None:
+        return
+    control_center.record_usage_sync(
+        provider=provider, model=model, input_tokens=input_tokens, output_tokens=output_tokens,
+    )
+
+
 class SmilekitAssistant:
     def __init__(
         self,
@@ -414,6 +440,7 @@ class SmilekitAssistant:
             tool_choice="auto",
             store=False,
         )
+        _record_llm_usage("openai", model or self.model, response)
         for item in response.output:
             if getattr(item, "type", None) != "function_call" or item.name != "send_template":
                 continue
@@ -444,6 +471,7 @@ class SmilekitAssistant:
             # в Мостовом), поэтому здесь его отключаем.
             extra_body={"thinking": {"type": "disabled"}},
         )
+        _record_llm_usage("deepseek", self.deepseek_model, response)
         content = response.choices[0].message.content
         if not content:
             return None
@@ -570,6 +598,7 @@ class SmilekitAssistant:
             tool_choice={"type": "function", "name": "submit_receipt_check"},
             store=False,
         )
+        _record_llm_usage("openai", self.model, response)
         for item in response.output:
             if getattr(item, "type", None) != "function_call" or item.name != "submit_receipt_check":
                 continue
@@ -638,6 +667,7 @@ class SmilekitAssistant:
                 # успевает съесть весь max_tokens до финального content.
                 extra_body={"thinking": {"type": "disabled"}},
             )
+            _record_llm_usage("deepseek", self.deepseek_model, response)
             text = (response.choices[0].message.content or "").strip()
         else:
             response = self.client.responses.create(
@@ -648,6 +678,7 @@ class SmilekitAssistant:
                 input=[*history, {"role": "user", "content": question}],
                 store=False,
             )
+            _record_llm_usage("openai", self.model, response)
             text = response.output_text.strip()
         if not text:
             raise RuntimeError("Dental assistant returned an empty answer")
@@ -715,6 +746,7 @@ class SmilekitAssistant:
                 # съедает max_tokens до финального content.
                 extra_body={"thinking": {"type": "disabled"}},
             )
+            _record_llm_usage("deepseek", self.deepseek_model, response)
             content = response.choices[0].message.content or "{}"
         else:
             response = self.client.responses.create(
@@ -725,6 +757,7 @@ class SmilekitAssistant:
                 input=[{"role": "user", "content": payload}],
                 store=False,
             )
+            _record_llm_usage("openai", self.model, response)
             content = response.output_text or "{}"
         return _parse_json_loose(content)
 
@@ -758,6 +791,7 @@ class SmilekitAssistant:
             model=model,
             file=stream,
         )
+        _record_llm_usage("openai", model, response)
         text = (response.text or "").strip()
         if not text:
             raise RuntimeError("OpenAI returned an empty transcription")
@@ -807,6 +841,7 @@ class SmilekitAssistant:
             ],
             store=False,
         )
+        _record_llm_usage("openai", model or self.model, response)
         text = response.output_text.strip()
         if not text:
             raise RuntimeError("OpenAI returned an empty manager response")
@@ -837,6 +872,7 @@ class SmilekitAssistant:
             # max_tokens до финального content (клиент получал заглушку).
             extra_body={"thinking": {"type": "disabled"}},
         )
+        _record_llm_usage("deepseek", self.deepseek_model, response)
         text = (response.choices[0].message.content or "").strip()
         if not text:
             raise RuntimeError("DeepSeek returned an empty manager response")
@@ -875,6 +911,7 @@ class SmilekitAssistant:
             text_format=SupervisorResult,
             store=False,
         )
+        _record_llm_usage("openai", model or self.model, response)
         result = response.output_parsed
         if result is None:
             raise RuntimeError("OpenAI returned no supervisor result")
@@ -894,6 +931,7 @@ class SmilekitAssistant:
             # до финального JSON.
             extra_body={"thinking": {"type": "disabled"}},
         )
+        _record_llm_usage("deepseek", self.deepseek_model, response)
         content = response.choices[0].message.content
         if not content:
             raise RuntimeError("DeepSeek returned no supervisor result")

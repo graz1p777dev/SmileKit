@@ -22,6 +22,7 @@ import re
 import urllib.error
 import urllib.request
 
+from . import control_center
 from .models import OrderDetails, SupervisorResult
 from .sales import MANAGER_CONTACT
 
@@ -236,6 +237,12 @@ class CrmClient:
             LOGGER.exception("CRM order delivery failed for %s", payload.get("externalKey"))
             return False
         LOGGER.info("Order %s delivered to CRM", payload.get("externalKey"))
+        await control_center.record_event(
+            type="order",
+            level="info",
+            title="Order delivered to CRM",
+            payload={"externalKey": payload.get("externalKey")},
+        )
         return True
 
     async def close_order(self, external_key: str, status: str = "delivered") -> bool:
@@ -305,6 +312,12 @@ class CrmClient:
         except Exception:
             LOGGER.exception("CRM deal creation failed for %s", payload.get("externalKey"))
             return False
+        await control_center.record_event(
+            type="deal",
+            level="info",
+            title="Deal created in CRM",
+            payload={"externalKey": payload.get("externalKey")},
+        )
         return True
 
     async def advance_stage(self, chat_id: int, action: str) -> bool:

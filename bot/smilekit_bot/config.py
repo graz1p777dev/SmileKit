@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     # Пусто = кнопки приложения и напоминания по курсу выключены, бот работает
     # ровно как раньше.
     miniapp_url: str = ""
+    # Телеметрия Control Center («коннектор CRM»): heartbeat, расход LLM,
+    # бизнес-события (сделка/заказ/ошибка). Пустые значения = коннектор
+    # выключен, бот работает ровно как раньше и никуда не шлёт.
+    control_center_url: str = ""
+    control_center_token: SecretStr = SecretStr("")
 
     model_config = SettingsConfigDict(
         env_file=".env",

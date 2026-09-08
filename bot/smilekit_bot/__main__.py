@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import logging
+import os
 import random
 import re
 import time
@@ -25,6 +26,7 @@ from aiohttp import web
 
 from .api import create_app, effective_settings
 from .config import Settings
+from . import control_center
 from .miniapp import current_day, next_reminder_due_at
 from .miniapp_store import COURSE_DAYS, PROCEDURE_DAYS, PROCEDURE_MINUTES
 from .crm import (
@@ -146,6 +148,9 @@ FOLLOWUP_NEXT_DAY_SEND_HOUR_BISHKEK = 12
 # Mini App «Моя программа»: напоминания по курсу. Проверяем чаще, чем шлём —
 # час напоминания клиент задаёт сам в профиле, и попасть в него нужно точно.
 MINIAPP_REMINDER_CHECK_INTERVAL_SECONDS = 10 * 60
+# Control Center («коннектор CRM»): «я жив» раз в пару минут, контракт
+# допускает 1-5 минут между сигналами.
+CONTROL_CENTER_HEARTBEAT_INTERVAL_SECONDS = 2 * 60
 
 
 def miniapp_reminder_text(day: int) -> str:
@@ -209,6 +214,7 @@ def next_allowed_send_time(now: float) -> float | None:
 
 
 async def main() -> None:
+    process_start_time = time.time()
     settings = Settings()
     bot = Bot(token=settings.telegram_bot_token.get_secret_value())
     dp = Dispatcher()
@@ -229,6 +235,14 @@ async def main() -> None:
     )
     if not crm.enabled:
         logging.info("CRM order push disabled: CRM_BASE_URL/CRM_INTERNAL_TOKEN not set")
+    control_center.configure(
+        settings.control_center_url,
+        settings.control_center_token.get_secret_value(),
+    )
+    if not control_center.enabled():
+        logging.info(
+            "Control Center connector disabled: CONTROL_CENTER_URL/CONTROL_CENTER_TOKEN not set"
+        )
     locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
     follow_up_tasks: set[asyncio.Task] = set()
     crm_tasks: set[asyncio.Task] = set()
@@ -342,6 +356,10 @@ async def main() -> None:
                 except Exception:
                     logging.exception("Daily nudge send failed chat=%s", chat_id)
                     storage.log_event(chat_id, "error", "nudge", "nudge.daily_discount_failed", "Не удалось отправить ежедневное напоминание")
+                    await control_center.record_event(
+                        type="error", level="error", title="Daily nudge send failed",
+                        payload={"chatId": chat_id},
+                    )
                 storage.advance_daily_nudge(chat_id, now + DAILY_NUDGE_INTERVAL_SECONDS)
 
     async def _send_nudge_follow_up(chat_id: int, kind: str, now: float) -> None:
@@ -393,6 +411,10 @@ async def main() -> None:
         except Exception:
             logging.exception("Nudge follow-up send failed chat=%s kind=%s", chat_id, kind)
             storage.log_event(chat_id, "error", "nudge", "nudge.failed", f"Не удалось отправить дожим «{kind}»")
+            await control_center.record_event(
+                type="error", level="error", title=f"Nudge follow-up send failed: {kind}",
+                payload={"chatId": chat_id},
+            )
 
     async def check_nudge_follow_ups() -> None:
         """Простой без ответа / незавершённый заказ — цепочка напоминаний из
@@ -1507,6 +1529,10 @@ async def main() -> None:
                     chat_id,
                     message.message_id,
                 )
+                await control_center.record_event(
+                    type="error", level="error", title="Text processing failed",
+                    payload={"chatId": chat_id},
+                )
                 await message.answer(
                     "Не получилось обработать сообщение. "
                     "Отправьте его, пожалуйста, ещё раз."
@@ -1557,6 +1583,9 @@ async def main() -> None:
                 due = app_store.due_reminders(now)
             except Exception:
                 logging.exception("Mini App reminder scan failed")
+                await control_center.record_event(
+                    type="error", level="error", title="Mini App reminder scan failed",
+                )
                 continue
             for row in due:
                 chat_id = row["chat_id"]
@@ -1588,6 +1617,35 @@ async def main() -> None:
                     next_due += 86400
                 app_store.schedule_reminder(chat_id, next_due, day)
 
+    async def check_control_center_heartbeat() -> None:
+        """«Я жив» для Control Center — см. control_center.py и контракт в
+        ADMINBOT/docs/CRM_CONNECTOR_CONTRACT.md. Никогда не бросает наружу:
+        heartbeat сам по себе не должен ронять бота."""
+        while True:
+            await asyncio.sleep(CONTROL_CENTER_HEARTBEAT_INTERVAL_SECONDS)
+            try:
+                git_sha = os.environ.get("RAILWAY_GIT_COMMIT_SHA")
+                await control_center.send_heartbeat(
+                    status="ok",
+                    git_sha=git_sha,
+                    environment=os.environ.get("RAILWAY_ENVIRONMENT_NAME", "production"),
+                    deploy_source="github" if git_sha else "unknown",
+                    uptime_seconds=time.time() - process_start_time,
+                    security={"envPresent": list(os.environ.keys())},
+                )
+            except Exception:
+                logging.exception("Control Center heartbeat failed")
+
+    async def flush_control_center_batches() -> None:
+        """Раз в минуту улетает батч usage/events, накопленный record_usage/
+        record_event (см. control_center.py). Никогда не бросает наружу."""
+        while True:
+            await asyncio.sleep(control_center.FLUSH_INTERVAL_SECONDS)
+            try:
+                await control_center.flush()
+            except Exception:
+                logging.exception("Control Center flush failed")
+
     base_commands = [
         BotCommand(command="reset", description="Очистить диалог и память"),
         BotCommand(command="repeat", description="Тест: перемотать таймеры дожима"),
@@ -1613,6 +1671,8 @@ async def main() -> None:
     daily_nudge_task = asyncio.create_task(check_daily_nudges())
     nudge_follow_up_task = asyncio.create_task(check_nudge_follow_ups())
     miniapp_reminder_task = asyncio.create_task(check_miniapp_reminders())
+    control_center_heartbeat_task = asyncio.create_task(check_control_center_heartbeat())
+    control_center_flush_task = asyncio.create_task(flush_control_center_batches())
 
     try:
         await bot.delete_webhook(drop_pending_updates=False)
@@ -1621,6 +1681,8 @@ async def main() -> None:
         daily_nudge_task.cancel()
         nudge_follow_up_task.cancel()
         miniapp_reminder_task.cancel()
+        control_center_heartbeat_task.cancel()
+        control_center_flush_task.cancel()
         for task in follow_up_tasks:
             task.cancel()
         for task in debounce_tasks.values():
