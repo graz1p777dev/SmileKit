@@ -249,7 +249,7 @@ async def record_event(
     level: str | None = None,
     payload: dict | None = None,
 ) -> None:
-    """Бизнес/ops-событие: type — "lead"|"deal"|"order"|"error". title и
+    """Бизнес/ops-событие: type — "lead"|"deal"|"order"|"error"|"backup". title и
     payload не должны содержать текст сообщений, телефоны или имена — только
     цифры и идентификаторы."""
     if not _enabled:

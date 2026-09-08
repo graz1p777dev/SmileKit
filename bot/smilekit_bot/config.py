@@ -51,6 +51,14 @@ class Settings(BaseSettings):
     # выключен, бот работает ровно как раньше и никуда не шлёт.
     control_center_url: str = ""
     control_center_token: SecretStr = SecretStr("")
+    # Резервные копии SQLite в S3-совместимое хранилище (Cloudflare R2 /
+    # Railway bucket), см. backup.py. Все пустые = загрузка выключена,
+    # копии остаются только локально в <dirname(database_path)>/backups/.
+    backup_s3_endpoint: str = ""
+    backup_s3_bucket: str = ""
+    backup_s3_access_key_id: str = ""
+    backup_s3_secret_access_key: SecretStr = SecretStr("")
+    backup_s3_region: str = "auto"
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -26,6 +26,7 @@ from aiohttp import web
 
 from .api import create_app, effective_settings
 from .config import Settings
+from . import backup
 from . import control_center
 from .miniapp import current_day, next_reminder_due_at
 from .miniapp_store import COURSE_DAYS, PROCEDURE_DAYS, PROCEDURE_MINUTES
@@ -1650,6 +1651,18 @@ async def main() -> None:
             except Exception:
                 logging.exception("Control Center flush failed")
 
+    async def run_periodic_backups() -> None:
+        """Резервная копия SQLite раз в 6 часов (первая — через 5 минут после
+        старта, см. backup.py). Сбой копии не должен влиять на бота — всё
+        внутри try/except, событие об ошибке уходит в Control Center."""
+        await asyncio.sleep(backup.FIRST_BACKUP_DELAY_SECONDS)
+        while True:
+            try:
+                await backup.backup_and_report(settings)
+            except Exception:
+                logging.exception("Scheduled SQLite backup failed")
+            await asyncio.sleep(backup.BACKUP_INTERVAL_SECONDS)
+
     base_commands = [
         BotCommand(command="reset", description="Очистить диалог и память"),
         BotCommand(command="repeat", description="Тест: перемотать таймеры дожима"),
@@ -1677,6 +1690,7 @@ async def main() -> None:
     miniapp_reminder_task = asyncio.create_task(check_miniapp_reminders())
     control_center_heartbeat_task = asyncio.create_task(check_control_center_heartbeat())
     control_center_flush_task = asyncio.create_task(flush_control_center_batches())
+    backup_task = asyncio.create_task(run_periodic_backups())
 
     try:
         await bot.delete_webhook(drop_pending_updates=False)
@@ -1687,6 +1701,7 @@ async def main() -> None:
         miniapp_reminder_task.cancel()
         control_center_heartbeat_task.cancel()
         control_center_flush_task.cancel()
+        backup_task.cancel()
         for task in follow_up_tasks:
             task.cancel()
         for task in debounce_tasks.values():
