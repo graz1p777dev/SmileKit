@@ -19,6 +19,7 @@ from pathlib import Path
 from aiohttp import web
 from aiogram.types import BufferedInputFile
 
+from . import control_center
 from .config import Settings
 from .miniapp import setup_miniapp
 from .models import ChatMessage
@@ -111,13 +112,20 @@ def _truncate(value: str, limit: int = MAX_PROMPT_LENGTH) -> tuple[str, bool]:
 
 
 def effective_settings(storage: BotStorage, settings: Settings) -> dict:
-    """Текущие действующие настройки: override из storage либо дефолт из prompts.py."""
+    """Текущие действующие настройки: override из storage либо дефолт из prompts.py.
+
+    Дефолт промпта менеджера — версия из Prompt Studio, если коннектор
+    Control Center её загрузил (см. control_center.current_prompt), иначе
+    локальный MANAGER_PROMPT. Явный override из настроек CRM по-прежнему
+    приоритетнее обоих."""
     manager_override = storage.get_bot_setting(MANAGER_PROMPT_KEY)
     supervisor_override = storage.get_bot_setting(SUPERVISOR_PROMPT_KEY)
     model_override = storage.get_bot_setting(MODEL_KEY)
     models = allowed_models(settings)
     model = model_override if model_override in models else settings.openai_model
-    manager_prompt, manager_was_truncated = _truncate(manager_override or MANAGER_PROMPT)
+    manager_prompt, manager_was_truncated = _truncate(
+        manager_override or control_center.current_prompt(MANAGER_PROMPT)
+    )
     supervisor_prompt, supervisor_was_truncated = _truncate(
         supervisor_override or SUPERVISOR_PROMPT
     )

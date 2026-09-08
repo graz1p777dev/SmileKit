@@ -1619,17 +1619,21 @@ async def main() -> None:
 
     async def check_control_center_heartbeat() -> None:
         """«Я жив» для Control Center — см. control_center.py и контракт в
-        ADMINBOT/docs/CRM_CONNECTOR_CONTRACT.md. Никогда не бросает наружу:
-        heartbeat сам по себе не должен ронять бота."""
+        ADMINBOT/docs/CRM_CONNECTOR_CONTRACT.md. Перед heartbeat — опрос
+        промпта из Prompt Studio (тот же интервал), чтобы heartbeat сразу
+        подтверждал (ACK) реально используемый promptVersionId. Никогда не
+        бросает наружу: heartbeat сам по себе не должен ронять бота."""
         while True:
             await asyncio.sleep(CONTROL_CENTER_HEARTBEAT_INTERVAL_SECONDS)
             try:
+                await control_center.fetch_prompt()
                 git_sha = os.environ.get("RAILWAY_GIT_COMMIT_SHA")
                 await control_center.send_heartbeat(
                     status="ok",
                     git_sha=git_sha,
                     environment=os.environ.get("RAILWAY_ENVIRONMENT_NAME", "production"),
                     deploy_source="github" if git_sha else "unknown",
+                    prompt_version_id=control_center.current_prompt_version_id(),
                     uptime_seconds=time.time() - process_start_time,
                     security={"envPresent": list(os.environ.keys())},
                 )

@@ -311,9 +311,11 @@ class SmilekitAssistant:
 
         manager_prompt/supervisor_prompt/model — override из настроек CRM
         (см. api.py). None означает «использовать встроенный дефолт» — так
-        живой бот и лаборатория используют один и тот же пайплайн.
+        живой бот и лаборатория используют один и тот же пайплайн. Дефолт
+        менеджера — промпт из Prompt Studio, если коннектор Control Center
+        его загрузил, иначе локальный MANAGER_PROMPT (см. control_center.py).
         """
-        effective_manager_prompt = manager_prompt or MANAGER_PROMPT
+        effective_manager_prompt = manager_prompt or control_center.current_prompt(MANAGER_PROMPT)
         effective_supervisor_prompt = supervisor_prompt or SUPERVISOR_PROMPT
         effective_model = model or self.model
 
@@ -819,9 +821,10 @@ class SmilekitAssistant:
         history: list[ChatMessage],
         customer_memory: str,
         image_data_url: str | None,
-        manager_prompt: str = MANAGER_PROMPT,
+        manager_prompt: str | None = None,
         model: str | None = None,
     ) -> str:
+        manager_prompt = manager_prompt or control_center.current_prompt(MANAGER_PROMPT)
         # Фото у DeepSeek не поддерживается (нет vision) — с картинкой
         # черновик остаётся на OpenAI, иначе уходит в DeepSeek.
         if self.deepseek_client and not image_data_url:

@@ -1,12 +1,17 @@
 """Лёгкий клиент телеметрии Control Center («коннектор CRM»).
 
 Контракт: /Users/alihantorebekov/Desktop/Projects/ADMINBOT/docs/CRM_CONNECTOR_CONTRACT.md
-Три вызова:
+Четыре вызова:
   - send_heartbeat  — «я жив», раз в ~2 минуты (см. __main__.py).
   - record_usage    — расход LLM-провайдера, кладётся в батч и уходит раз в
                        минуту (флаш — фоновая задача, см. __main__.py).
   - record_event    — бизнес/ops-событие (сделка, заказ, ошибка), тот же батч
                        и тот же интервал.
+  - fetch_prompt    — системный промпт менеджера из Prompt Studio (GET с
+                       If-None-Match по versionId, тот же цикл, что heartbeat).
+                       Последняя удачно загруженная версия живёт в памяти
+                       модуля; current_prompt() отдаёт её вместо локального
+                       MANAGER_PROMPT, а heartbeat подтверждает versionId (ACK).
 
 Как и crm.py: «отправил и забыл» — сеть не должна ронять бота и не должна
 задерживать ответ клиенту. Пустые CONTROL_CENTER_URL/CONTROL_CENTER_TOKEN —
@@ -31,6 +36,7 @@ LOGGER = logging.getLogger(__name__)
 HEARTBEAT_PATH = "/api/v1/connector/heartbeat"
 USAGE_PATH = "/api/v1/connector/usage"
 EVENTS_PATH = "/api/v1/connector/events"
+PROMPT_PATH = "/api/v1/connector/prompt"
 REQUEST_TIMEOUT = 5.0
 MAX_BATCH = 500
 FLUSH_INTERVAL_SECONDS = 60
@@ -43,14 +49,21 @@ _usage_batch: list[dict] = []
 _event_batch: list[dict] = []
 _lock = threading.Lock()
 
+# Последний удачно загруженный промпт из Prompt Studio. None — ещё не
+# загружали / промпт не опубликован (404) — работаем на локальном.
+_prompt_compiled: str | None = None
+_prompt_version_id: str | None = None
+
 
 def configure(base_url: str, token: str) -> None:
     """Вызывается один раз при старте бота. Пустые значения — коннектор
     выключен, все остальные функции этого модуля становятся no-op."""
-    global _base_url, _token, _enabled
+    global _base_url, _token, _enabled, _prompt_compiled, _prompt_version_id
     _base_url = (base_url or "").strip().rstrip("/")
     _token = (token or "").strip()
     _enabled = bool(_base_url and _token)
+    _prompt_compiled = None
+    _prompt_version_id = None
     with _lock:
         _usage_batch.clear()
         _event_batch.clear()
@@ -74,6 +87,65 @@ def _post(path: str, payload: dict) -> None:
         response.read()
 
 
+def _get_prompt(known_version_id: str | None) -> tuple[str, str] | None:
+    """GET /connector/prompt. Возвращает (compiled, versionId) на 200,
+    None на 304 (не изменился) и 404 (промпт не опубликован); остальные
+    HTTP-ошибки и сетевые сбои — исключение, разбирает fetch_prompt."""
+    headers = {"Authorization": f"Bearer {_token}"}
+    if known_version_id:
+        headers["If-None-Match"] = f'"{known_version_id}"'
+    request = urllib.request.Request(f"{_base_url}{PROMPT_PATH}", headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        if error.code in (304, 404):
+            return None
+        raise
+    compiled = body.get("compiled")
+    version_id = body.get("versionId")
+    if not isinstance(compiled, str) or not compiled.strip() or not version_id:
+        raise ValueError("Control Center prompt response lacks compiled/versionId")
+    return compiled, str(version_id)
+
+
+async def fetch_prompt() -> str | None:
+    """Опрос Prompt Studio (раз в ~2 минуты, см. __main__.py). Возвращает
+    versionId только что загруженной новой версии, иначе None: 304/404,
+    сеть, невалидный ответ — остаёмся на последней удачной версии (или на
+    локальном промпте). Никогда не бросает наружу."""
+    global _prompt_compiled, _prompt_version_id
+    if not _enabled:
+        return None
+    try:
+        result = await asyncio.to_thread(_get_prompt, _prompt_version_id)
+    except Exception:
+        LOGGER.warning("Control Center prompt fetch failed: %s", _base_url, exc_info=True)
+        return None
+    if result is None:
+        return None
+    compiled, version_id = result
+    if version_id == _prompt_version_id:
+        return None
+    _prompt_compiled, _prompt_version_id = compiled, version_id
+    LOGGER.info("Control Center prompt loaded: versionId=%s chars=%d", version_id, len(compiled))
+    return version_id
+
+
+def current_prompt_version_id() -> str | None:
+    """versionId промпта, на котором реально работает бот (для ACK в
+    heartbeat); None — работаем на локальном MANAGER_PROMPT."""
+    return _prompt_version_id
+
+
+def current_prompt(local_fallback: str) -> str:
+    """Системный промпт менеджера: загруженный из Prompt Studio, иначе
+    локальный. При выключенном коннекторе всегда локальный."""
+    if _enabled and _prompt_compiled is not None:
+        return _prompt_compiled
+    return local_fallback
+
+
 async def send_heartbeat(
     *,
     status: str = "ok",
@@ -81,6 +153,7 @@ async def send_heartbeat(
     git_sha: str | None = None,
     environment: str | None = None,
     deploy_source: str | None = None,
+    prompt_version_id: str | None = None,
     uptime_seconds: float | None = None,
     details: dict | None = None,
     security: dict | None = None,
@@ -98,6 +171,8 @@ async def send_heartbeat(
         payload["environment"] = environment
     if deploy_source is not None:
         payload["deploySource"] = deploy_source
+    if prompt_version_id is not None:
+        payload["promptVersionId"] = prompt_version_id
     if uptime_seconds is not None:
         payload["uptimeSeconds"] = uptime_seconds
     if details is not None:
