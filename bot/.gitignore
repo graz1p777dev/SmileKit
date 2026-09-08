@@ -1,4 +1,5 @@
 .env
+.env.template_test
 .venv/
 __pycache__/
 .pytest_cache/
