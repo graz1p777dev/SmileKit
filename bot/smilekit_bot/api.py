@@ -211,7 +211,19 @@ async def post_transcribe_handler(request: web.Request) -> web.Response:
         return web.json_response({"error": "invalid_audio_size"}, status=400)
     settings: Settings = request.app["settings"]
     assistant: SmilekitAssistant = request.app["assistant"]
-    transcript = await assistant.transcribe(audio, filename[:160], settings.transcription_model)
+    try:
+        transcript = await assistant.transcribe(audio, filename[:160], settings.transcription_model)
+    except Exception as exc:
+        # Сбой транскрибации (например, Gemini 429) — клиент с голосовым
+        # остаётся без ответа, поэтому сигналим в Control Center отдельным
+        # событием; без PII: только класс ошибки и размер аудио.
+        await control_center.record_event(
+            type="transcribe_failed",
+            level="warning",
+            title="Voice transcription failed",
+            payload={"error": type(exc).__name__, "audioBytes": len(audio)},
+        )
+        raise
     return web.json_response({"transcript": transcript})
 
 
