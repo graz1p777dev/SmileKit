@@ -67,11 +67,19 @@ def _assistant(tmp_path) -> SmilekitAssistant:
 
 
 def _assert_no_key(error: BaseException) -> None:
+    """Проверяем ровно то, что попадёт в лог: traceback печатает __cause__, а
+    __context__ — только если он не подавлен (raise ... from None ставит
+    __suppress_context__=True, сам объект контекста Python всё равно хранит)."""
     seen = []
     cursor: BaseException | None = error
     while cursor is not None:
         seen.append(str(cursor))
-        cursor = cursor.__cause__ or cursor.__context__
+        if cursor.__cause__ is not None:
+            cursor = cursor.__cause__
+        elif not cursor.__suppress_context__:
+            cursor = cursor.__context__
+        else:
+            cursor = None
     joined = "\n".join(seen)
     assert SECRET not in joined
     assert "key=" not in joined
