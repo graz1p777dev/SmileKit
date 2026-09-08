@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # HTTP-слой /internal/* для CRM (настройки бота + лаборатория). Пустой токен
     # выключает вход в /internal/settings и /internal/lab, кроме /internal/health.
     bot_internal_token: SecretStr = SecretStr("")
+    # Второй принимаемый токен на время ротации BOT_INTERNAL_TOKEN без
+    # простоя (см. docs/ROTATION.md). Пусто = принимается только основной.
+    bot_internal_token_next: SecretStr = SecretStr("")
     port: int = 8080
     # Доп. модели через запятую, которые можно выбрать в настройках бота, помимо
     # текущей openai_model. По умолчанию пусто: единственная разрешённая модель —

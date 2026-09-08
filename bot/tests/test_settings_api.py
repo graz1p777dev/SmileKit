@@ -393,3 +393,63 @@ async def test_events_endpoint_requires_auth(tmp_path):
     async with running_client(tmp_path) as (client, storage, settings):
         resp = await client.get("/internal/events")
         assert resp.status == 403
+
+
+# ─── Ротация BOT_INTERNAL_TOKEN через *_NEXT (docs/ROTATION.md) ────────────
+
+
+@pytest.mark.asyncio
+async def test_auth_accepts_both_current_and_next_token(tmp_path):
+    async with running_client(tmp_path, bot_internal_token_next="next-token") as (client, storage, settings):
+        current = await client.get("/internal/settings", headers={"x-internal-token": TOKEN})
+        assert current.status == 200
+        following = await client.get("/internal/settings", headers={"x-internal-token": "next-token"})
+        assert following.status == 200
+
+
+@pytest.mark.asyncio
+async def test_auth_with_next_configured_still_rejects_wrong_token(tmp_path):
+    async with running_client(tmp_path, bot_internal_token_next="next-token") as (client, storage, settings):
+        resp = await client.get("/internal/settings", headers={"x-internal-token": "wrong"})
+        assert resp.status == 403
+        resp = await client.get("/internal/settings")
+        assert resp.status == 403
+
+
+@pytest.mark.asyncio
+async def test_auth_ignores_empty_next_token(tmp_path):
+    async with running_client(tmp_path, bot_internal_token_next="") as (client, storage, settings):
+        resp = await client.get("/internal/settings", headers={"x-internal-token": ""})
+        assert resp.status == 403
+        resp = await client.get("/internal/settings", headers={"x-internal-token": TOKEN})
+        assert resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_auth_uses_constant_time_compare_for_every_candidate(tmp_path, monkeypatch):
+    import hmac
+
+    real_compare_digest = hmac.compare_digest
+    calls = []
+
+    def spy(a, b):
+        calls.append((a, b))
+        return real_compare_digest(a, b)
+
+    monkeypatch.setattr("smilekit_bot.api.hmac.compare_digest", spy)
+    async with running_client(tmp_path, bot_internal_token_next="next-token") as (client, storage, settings):
+        resp = await client.get("/internal/settings", headers={"x-internal-token": TOKEN})
+        assert resp.status == 200
+    # Оба кандидата сверяются compare_digest, без раннего выхода после
+    # совпадения с первым.
+    assert calls == [
+        (TOKEN.encode(), TOKEN.encode()),
+        (TOKEN.encode(), b"next-token"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_auth_non_ascii_header_is_rejected_not_500(tmp_path):
+    async with running_client(tmp_path) as (client, storage, settings):
+        resp = await client.get("/internal/settings", headers={"x-internal-token": "тайна"})
+        assert resp.status == 403

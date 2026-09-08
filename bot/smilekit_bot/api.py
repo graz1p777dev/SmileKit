@@ -147,14 +147,28 @@ def effective_settings(storage: BotStorage, settings: Settings) -> dict:
 
 def _require_auth(request: web.Request) -> web.Response | None:
     settings: Settings = request.app["settings"]
-    expected = settings.bot_internal_token.get_secret_value()
-    provided = request.headers.get("x-internal-token", "")
+    provided = request.headers.get("x-internal-token", "").encode("utf-8")
+    # Ротация без простоя (docs/ROTATION.md): пока CRM переключается на новый
+    # секрет, принимаем и текущий BOT_INTERNAL_TOKEN, и BOT_INTERNAL_TOKEN_NEXT.
+    # Пустые значения не участвуют — пустой заголовок ничему не равен.
+    accepted = [
+        token.encode("utf-8")
+        for token in (
+            settings.bot_internal_token.get_secret_value(),
+            settings.bot_internal_token_next.get_secret_value(),
+        )
+        if token
+    ]
     # Живой баг: обычное `!=` сравнивает строки посимвольно и выходит на
     # первом несовпадении — время ответа слегка зависит от того, сколько
     # начальных символов угаданы верно (timing side-channel на секрет,
     # который может слать сообщения от имени бота и двигать сделки в CRM).
     # compare_digest — та же защита, что уже стоит у Mini App (miniapp.py).
-    if not expected or not hmac.compare_digest(provided, expected):
+    # Сверяем со всеми кандидатами без раннего выхода по той же причине.
+    matched = False
+    for expected in accepted:
+        matched |= hmac.compare_digest(provided, expected)
+    if not matched:
         return web.json_response({"error": "forbidden"}, status=403)
     return None
 
