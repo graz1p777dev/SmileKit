@@ -770,11 +770,39 @@ class SmilekitAssistant:
         return _parse_json_loose(content)
 
     async def transcribe(
-        self, audio: bytes, filename: str, model: str = "gpt-transcribe"
+        self, audio: bytes, filename: str, model: str = "whisper-1"
     ) -> str:
+        """Расшифровка голосового: сначала OpenAI, Gemini — запасной вариант.
+
+        Живой инцидент: приоритет был жёстко у Gemini («if self.gemini_api_key»),
+        а бесплатная квота Gemini упирается в 429 Too Many Requests. Ключ
+        OpenAI при этом задан и работает, но код до него не доходил — клиент,
+        приславший голосовое, оставался вообще без ответа. Теперь провайдеры
+        пробуются по очереди: отказ первого не оставляет клиента без ответа.
+        """
+        errors: list[str] = []
+
+        # Клиент OpenAI существует всегда (см. __init__), поэтому пробуем его
+        # без дополнительных условий: если ключ пуст или неверен, запрос
+        # отвалится и мы просто перейдём к Gemini.
+        try:
+            return await asyncio.to_thread(self._transcribe, audio, filename, model)
+        except Exception as error:  # noqa: BLE001 — пробуем запасной провайдер
+            errors.append(f"OpenAI: {error}")
+            LOGGER.warning("Транскрибация через OpenAI не удалась: %s", error)
+
         if self.gemini_api_key:
-            return await self._transcribe_gemini(audio, filename)
-        return await asyncio.to_thread(self._transcribe, audio, filename, model)
+            try:
+                return await self._transcribe_gemini(audio, filename)
+            except Exception as error:  # noqa: BLE001 — оба провайдера отказали
+                errors.append(f"Gemini: {error}")
+                LOGGER.warning("Транскрибация через Gemini не удалась: %s", error)
+
+        raise RuntimeError(
+            "Не удалось расшифровать голосовое. " + "; ".join(errors)
+            if errors
+            else "Не настроен ни один провайдер транскрибации"
+        )
 
     async def _transcribe_gemini(self, audio: bytes, filename: str) -> str:
         extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else "ogg"
@@ -792,9 +820,18 @@ class SmilekitAssistant:
             raise RuntimeError("Gemini returned an empty transcription")
         return text
 
+    # OpenAI определяет формат аудио по расширению имени файла и отвергает
+    # «oga» («Unsupported file format oga»), хотя это тот же контейнер Ogg,
+    # что и «ogg». Голосовые WhatsApp приходят именно как .oga — без этой
+    # подмены каждое голосовое падало на OpenAI и уходило в Gemini, который
+    # отвечал 429. Байты не трогаем, меняем только имя.
+    _OPENAI_EXTENSION_ALIASES = {"oga": "ogg", "opus": "ogg"}
+
     def _transcribe(self, audio: bytes, filename: str, model: str) -> str:
         stream = io.BytesIO(audio)
-        stream.name = filename
+        stem, dot, extension = filename.rpartition(".")
+        alias = self._OPENAI_EXTENSION_ALIASES.get(extension.lower()) if dot else None
+        stream.name = f"{stem}.{alias}" if alias else filename
         response = self.client.audio.transcriptions.create(
             model=model,
             file=stream,

@@ -6,7 +6,10 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr
     openai_api_key: SecretStr
     openai_model: str = "gpt-5.6-luna"
-    transcription_model: str = "gpt-transcribe"
+    # whisper-1 — модель транскрибации OpenAI, доступная на всех аккаунтах.
+    # Прежним значением стояло "gpt-transcribe" — такой модели у OpenAI нет,
+    # и запасной путь транскрибации всё равно упал бы с 404.
+    transcription_model: str = "whisper-1"
     # Текст (черновик/ревью/роутер шаблонов) уходит в DeepSeek — дешевле и не
     # содержит PII (см. privacy.py); DeepSeek не умеет vision и транскрибацию
     # аудио, поэтому фото чеков и голосовые — на Gemini (умеет оба, дешевле
@@ -14,8 +17,9 @@ class Settings(BaseSettings):
     deepseek_api_key: SecretStr = SecretStr("")
     deepseek_model: str = "deepseek-v4-flash"
     deepseek_base_url: str = "https://api.deepseek.com"
-    # Проверка чеков (vision) и транскрибация голосовых. Пустой ключ = Gemini
-    # выключен, оба сценария идут на OpenAI (openai_api_key/transcription_model).
+    # Проверка чеков (vision). Для транскрибации голосовых Gemini теперь
+    # ЗАПАСНОЙ вариант: сначала пробуется OpenAI (см. transcribe в service.py),
+    # потому что бесплатная квота Gemini регулярно упирается в 429.
     gemini_api_key: SecretStr = SecretStr("")
     # "latest"-алиас, а не конкретная версия: pinned gemini-2.5-flash отдавал
     # 404 "no longer available to new users" на этом ключе (несмотря на то,
