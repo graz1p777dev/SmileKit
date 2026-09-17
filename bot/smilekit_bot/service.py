@@ -523,6 +523,9 @@ class SmilekitAssistant:
                 "amount_ok": {"type": "BOOLEAN"},
                 "recipient_ok": {"type": "BOOLEAN"},
                 "date_ok": {"type": "BOOLEAN"},
+                # Необязательное: CRM записывает по нему сумму оплаты. Не в
+                # required — чек с нечитаемой суммой не должен ломать проверку.
+                "detected_amount_kgs": {"type": "NUMBER", "nullable": True},
             },
             "required": ["is_real_receipt_screenshot", "amount_ok", "recipient_ok", "date_ok"],
         }
@@ -532,12 +535,16 @@ class SmilekitAssistant:
         ]
         data = await self._gemini_generate(parts, response_schema=schema)
         result = json.loads(data)
-        return {
+        parsed = {
             "is_real_receipt_screenshot": bool(result.get("is_real_receipt_screenshot")),
             "amount_ok": bool(result.get("amount_ok")),
             "recipient_ok": bool(result.get("recipient_ok")),
             "date_ok": bool(result.get("date_ok")),
         }
+        # Как в OpenAI-ветке (_verify_receipt): поле есть только если модель его вернула.
+        if result.get("detected_amount_kgs") is not None:
+            parsed["detected_amount_kgs"] = result["detected_amount_kgs"]
+        return parsed
 
     async def _gemini_generate(self, parts: list[dict], *, response_schema: dict | None = None) -> str:
         """Вызывает Gemini generateContent, возвращает текст первого кандидата.

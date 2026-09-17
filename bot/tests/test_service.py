@@ -337,6 +337,40 @@ async def test_verify_receipt_returns_detected_values_for_explicit_group_reason(
     assert result["detected_date"] == "07.08.2026"
 
 
+def gemini_assistant(tmp_path, monkeypatch, answer: dict, seen: dict) -> SmilekitAssistant:
+    knowledge = tmp_path / "knowledge_base.md"
+    knowledge.write_text("[ЗАПОЛНИТЬ]", encoding="utf-8")
+    bot = SmilekitAssistant(
+        api_key="test", knowledge_path=knowledge, client=SimpleNamespace(), gemini_api_key="g-key"
+    )
+
+    async def fake_generate(parts, *, response_schema=None):
+        seen["schema"] = response_schema
+        return json.dumps(answer)
+
+    monkeypatch.setattr(bot, "_gemini_generate", fake_generate)
+    return bot
+
+
+@pytest.mark.asyncio
+async def test_verify_receipt_gemini_passes_detected_amount(tmp_path, monkeypatch):
+    """CRM записывает сумму оплаты по detected_amount_kgs — Gemini-ветка
+    должна отдавать его так же, как OpenAI-ветка."""
+    seen = {}
+    bot = gemini_assistant(tmp_path, monkeypatch, {**_FULL_MATCH, "detected_amount_kgs": 1490}, seen)
+    result = await bot.verify_receipt("data:image/jpeg;base64,abc", "2026-08-06")
+    assert result == {**_FULL_MATCH, "detected_amount_kgs": 1490}
+    assert seen["schema"]["properties"]["detected_amount_kgs"]["type"] == "NUMBER"
+    assert "detected_amount_kgs" not in seen["schema"]["required"]
+
+
+@pytest.mark.asyncio
+async def test_verify_receipt_gemini_without_amount_keeps_old_shape(tmp_path, monkeypatch):
+    bot = gemini_assistant(tmp_path, monkeypatch, {**_FULL_MATCH, "detected_amount_kgs": None}, {})
+    result = await bot.verify_receipt("data:image/jpeg;base64,abc", "2026-08-06")
+    assert result == _FULL_MATCH
+
+
 @pytest.mark.asyncio
 async def test_verify_receipt_without_function_call_is_unverified(tmp_path):
     responses = FakeRouteResponses(None, function_name="submit_receipt_check")

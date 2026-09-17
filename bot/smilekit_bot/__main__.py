@@ -63,6 +63,7 @@ from .sales import (
     wants_payment_info,
     wants_to_order,
 )
+from .staff import register_staff_handlers
 from .service import (
     PAYMENT_MAX_AMOUNT_KGS,
     PAYMENT_MIN_AMOUNT_KGS,
@@ -1170,6 +1171,10 @@ async def main() -> None:
             await bot.send_media_group(chat_id, media=review_photo_group())
             storage.log_event(chat_id, "info", "reply", "reply.reviews_sent", "Отправлены фото отзывов клиентов")
 
+    # Смены сотрудников — раньше всех клиентских хендлеров: пароль после
+    # /staffs иначе забрал бы общий F.text и отправил в ИИ (см. staff.py).
+    register_staff_handlers(dp, crm, storage)
+
     @dp.message(CommandStart())
     async def start(message: Message) -> None:
         async with locks[message.chat.id]:
@@ -1666,6 +1671,7 @@ async def main() -> None:
     base_commands = [
         BotCommand(command="reset", description="Очистить диалог и память"),
         BotCommand(command="repeat", description="Тест: перемотать таймеры дожима"),
+        BotCommand(command="staffs", description="Смена сотрудника"),
     ]
     if settings.miniapp_url:
         # Команды раньше кнопки меню: их регистрация возвращает кнопку к

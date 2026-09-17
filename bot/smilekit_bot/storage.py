@@ -131,6 +131,10 @@ class BotStorage:
                     chat_id INTEGER PRIMARY KEY,
                     lang TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS staff_password_waits (
+                    chat_id INTEGER PRIMARY KEY,
+                    expires_at REAL NOT NULL
+                );
                 """
             )
             self._db.commit()
@@ -224,6 +228,39 @@ class BotStorage:
     def resume_chat(self, chat_id: int) -> None:
         with self._lock:
             self._db.execute("DELETE FROM paused_chats WHERE chat_id = ?", (chat_id,))
+            self._db.commit()
+
+    def start_staff_password_wait(self, chat_id: int, expires_at: float) -> None:
+        """После /staffs следующее текстовое сообщение чата — пароль сотрудника.
+        В SQLite, а не в памяти процесса: если бот перезапустится между /staffs
+        и паролем, пароль всё равно не уйдёт в ИИ и в CRM-сделку клиента."""
+        with self._lock:
+            self._db.execute(
+                """
+                INSERT INTO staff_password_waits(chat_id, expires_at) VALUES (?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET expires_at = excluded.expires_at
+                """,
+                (chat_id, expires_at),
+            )
+            self._db.commit()
+
+    def is_waiting_staff_password(self, chat_id: int, now: float) -> bool:
+        """Просроченное ожидание считается отменённым и сразу удаляется."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT expires_at FROM staff_password_waits WHERE chat_id = ?", (chat_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            if row["expires_at"] > now:
+                return True
+            self._db.execute("DELETE FROM staff_password_waits WHERE chat_id = ?", (chat_id,))
+            self._db.commit()
+        return False
+
+    def clear_staff_password_wait(self, chat_id: int) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM staff_password_waits WHERE chat_id = ?", (chat_id,))
             self._db.commit()
 
     def set_results_chain_anchor(self, chat_id: int, message_id: int) -> None:

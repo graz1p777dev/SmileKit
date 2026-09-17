@@ -39,6 +39,10 @@ ORDER_CLOSE_PATH = "/api/internal/orders/close"
 ORDER_NOTIFY_SHIPPED_PATH = "/api/internal/orders/notify-shipped"
 DEALS_PATH = "/api/internal/deals"
 NOTIFY_PATH = "/api/internal/notify"
+STAFF_LOGIN_PATH = "/api/internal/staff/login"
+STAFF_STATE_PATH = "/api/internal/staff/state"
+STAFF_ACTION_PATH = "/api/internal/staff/action"
+STAFF_DECIDE_PATH = "/api/internal/staff/decide"
 REQUEST_TIMEOUT = 10.0
 CURRENCIES = {"KGS", "USD", "RUB"}
 MAX_QUANTITY = 1000
@@ -221,6 +225,46 @@ class CrmClient:
         )
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
             response.read()
+
+    def _request_json(self, path: str, payload: dict) -> tuple[int, dict]:
+        """POST с разбором ответа. В отличие от _request, тело нужно и при
+        ошибке: смены сотрудников отвечают 401/429 с текстом для человека
+        (осталось попыток, через сколько минут повторить)."""
+        request = urllib.request.Request(
+            f"{self.base_url}{path}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "x-internal-token": self.token,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                status, raw = response.status, response.read()
+        except urllib.error.HTTPError as error:
+            status, raw = error.code, error.read()
+        try:
+            body = json.loads(raw or b"{}")
+        except ValueError:
+            body = {}
+        return status, body if isinstance(body, dict) else {}
+
+    async def staff_call(self, path: str, payload: dict) -> tuple[int, dict] | None:
+        """Запрос к /api/internal/staff/*: (HTTP-статус, тело) или None, если
+        CRM не ответила (выключена, таймаут, сеть, 5xx) — сотруднику тогда
+        показывается «CRM не отвечает». Никогда не бросает исключение наружу."""
+        if not self.enabled:
+            return None
+        try:
+            status, body = await asyncio.to_thread(self._request_json, path, payload)
+        except Exception:
+            LOGGER.exception("CRM staff request failed path=%s", path)
+            return None
+        if status >= 500:
+            LOGGER.warning("CRM staff request failed path=%s: HTTP %s", path, status)
+            return None
+        return status, body
 
     async def send_order(self, payload: dict) -> bool:
         """Отправляет заказ. Никогда не бросает исключение наружу."""

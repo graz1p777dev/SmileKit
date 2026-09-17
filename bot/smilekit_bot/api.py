@@ -17,7 +17,8 @@ import time
 from pathlib import Path
 
 from aiohttp import web
-from aiogram.types import BufferedInputFile
+from aiogram.exceptions import TelegramAPIError
+from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 
 from . import control_center
 from .config import Settings
@@ -595,6 +596,71 @@ async def post_push_delivery_handler(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+STAFF_NOTIFY_MAX_TEXT = 4000
+STAFF_NOTIFY_MAX_BUTTONS = 6
+# Лимит Telegram на callback_data — 64 байта, не символа.
+STAFF_NOTIFY_MAX_CALLBACK_BYTES = 64
+
+
+async def post_staff_notify_handler(request: web.Request) -> web.Response:
+    """CRM шлёт сотруднику уведомление о смене (смена началась/закрыта,
+    запрос подтверждён, клиент ждёт ответа) — с кнопками «Подтвердить /
+    Отклонить», которые ловит staff.py. Договор: STAFF_SPEC.md."""
+    denied = _require_auth(request)
+    if denied is not None:
+        return denied
+    bot = request.app.get("bot")
+    if bot is None:
+        return web.json_response({"error": "bot_unavailable"}, status=503)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid_json"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "invalid_body"}, status=400)
+
+    telegram_id = body.get("telegramId")
+    # bool — подкласс int в Python, true не должен сойти за чат с id 1.
+    if isinstance(telegram_id, bool) or not isinstance(telegram_id, int):
+        return web.json_response({"error": "telegramId must be an integer"}, status=400)
+    text = body.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return web.json_response({"error": "text is required"}, status=400)
+    if len(text) > STAFF_NOTIFY_MAX_TEXT:
+        return web.json_response({"error": "text is too long"}, status=400)
+
+    buttons = body.get("buttons")
+    if buttons is None:
+        buttons = []
+    if not isinstance(buttons, list) or len(buttons) > STAFF_NOTIFY_MAX_BUTTONS:
+        return web.json_response({"error": "buttons must be a list of at most 6"}, status=400)
+    rows = []
+    for button in buttons:
+        label = button.get("text") if isinstance(button, dict) else None
+        data = button.get("callbackData") if isinstance(button, dict) else None
+        if not isinstance(label, str) or not label.strip() or not isinstance(data, str) or not data:
+            return web.json_response({"error": "invalid button"}, status=400)
+        if len(data.encode("utf-8")) > STAFF_NOTIFY_MAX_CALLBACK_BYTES:
+            return web.json_response({"error": "callbackData is longer than 64 bytes"}, status=400)
+        rows.append([InlineKeyboardButton(text=label, callback_data=data)])
+
+    try:
+        await bot.send_message(
+            telegram_id,
+            text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None,
+        )
+    except TelegramAPIError as error:
+        # Сотрудник заблокировал бота, не нажимал /start и т.п. — CRM решает сама,
+        # что с этим делать; текст Telegram без токена, отдаём его как есть.
+        LOGGER.warning("Staff notify failed telegram_id=%s: %s", telegram_id, error.message)
+        return web.json_response({"error": error.message}, status=502)
+    except Exception:
+        LOGGER.exception("Staff notify failed telegram_id=%s", telegram_id)
+        return web.json_response({"error": "send_failed"}, status=502)
+    return web.json_response({"ok": True})
+
+
 @web.middleware
 async def error_middleware(request: web.Request, handler):
     try:
@@ -631,6 +697,7 @@ def create_app(
     app.router.add_post("/internal/chats/{chat_id}/message", post_chat_message_handler)
     app.router.add_post("/internal/chats/{chat_id}/broadcast", post_chat_broadcast_handler)
     app.router.add_get("/internal/events", get_events_handler)
+    app.router.add_post("/internal/staff/notify", post_staff_notify_handler)
     # Mini App живёт под /app на том же порту и со своей авторизацией
     # (подпись initData вместо сервисного токена CRM) — см. miniapp.py.
     setup_miniapp(app, settings.database_path)
