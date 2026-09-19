@@ -272,7 +272,7 @@ class SmilekitAssistant:
         knowledge_path: Path | None = None,
         client: OpenAI | None = None,
         deepseek_api_key: str | None = None,
-        deepseek_model: str = "deepseek-v4-flash",
+        deepseek_model: str = "deepseek-flash",
         deepseek_base_url: str = "https://api.deepseek.com",
         deepseek_client: OpenAI | None = None,
         gemini_api_key: str | None = None,

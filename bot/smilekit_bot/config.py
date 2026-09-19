@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # аудио, поэтому фото чеков и голосовые — на Gemini (умеет оба, дешевле
     # OpenAI). Пустой ключ = DeepSeek выключен, текст идёт на openai_model.
     deepseek_api_key: SecretStr = SecretStr("")
-    deepseek_model: str = "deepseek-v4-flash"
+    deepseek_model: str = "deepseek-flash"
     deepseek_base_url: str = "https://api.deepseek.com"
     # Проверка чеков (vision). Для транскрибации голосовых Gemini теперь
     # ЗАПАСНОЙ вариант: сначала пробуется OpenAI (см. transcribe в service.py),
