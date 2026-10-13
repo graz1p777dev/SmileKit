@@ -701,4 +701,9 @@ def create_app(
     # Mini App живёт под /app на том же порту и со своей авторизацией
     # (подпись initData вместо сервисного токена CRM) — см. miniapp.py.
     setup_miniapp(app, settings.database_path)
+    # Новая логика WhatsApp (пилот на отдельных номерах) — см. wa_api.py.
+    # Импорт здесь, а не вверху: wa_api сам берёт _require_auth из этого модуля.
+    from .wa_api import setup_wa
+
+    setup_wa(app, settings, assistant)
     return app
