@@ -98,7 +98,7 @@ async def test_seeded_chat_gets_no_presentation_and_manager_mode_is_released(tmp
         # CRM снова позвала движок — значит, чат возвращён боту
         brain.next = Understanding(intent="greeting")
         outs = (await post(client, "handle", chatId=CHAT, messages=[{"id": "m2", "text": "Здравствуйте"}]))["outgoing"]
-        assert len(outs) == 1 and outs[0]["body"] != R.PRESENTATION
+        assert [out["body"] for out in outs] == ["Здравствуйте! 😊 Конечно, я на связи. Что подсказать?", R.CITY_QUESTION]
 
 
 @pytest.mark.asyncio
